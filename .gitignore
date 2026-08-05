@@ -1,0 +1,8 @@
+# NUNCA suba a chave/segredos reais para o GitHub
+.streamlit/secrets.toml
+
+# Arquivos gerados
+*.xlsx
+__pycache__/
+*.pyc
+.DS_Store
