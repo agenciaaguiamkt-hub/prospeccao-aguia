@@ -344,6 +344,33 @@ def buscar_instagram(site_url, contador=None):
         return "erro ao acessar site"
 
 
+def _normalizar_link_instagram(url):
+    url = url.split("?")[0].split("#")[0]
+    if not url.endswith("/"):
+        url += "/"
+    return url
+
+
+def resolver_instagram(site_url, contador=None):
+    """Descobre o Instagram de um estabelecimento a partir do seu `site`.
+
+    Bug corrigido: em muitos casos o Google já cadastra o próprio perfil do
+    Instagram COMO o "site" do estabelecimento (comum em negócios pequenos
+    que não têm site próprio). Antes, o código tentava abrir esse link como
+    se fosse um site comum e fazia scraping da página em busca de outro
+    link de Instagram dentro dela - o que quase sempre falhava (Instagram
+    bloqueia acesso automatizado sem login, retornando erro ou uma parede
+    de login), gerando "erro ao acessar site" mesmo com o link certo já
+    disponível. Agora, se o `site_url` já é um link do instagram.com, ele é
+    usado diretamente, sem tentar buscar - mais rápido, mais barato (uma
+    chamada HTTP a menos) e sem essa falha."""
+    if not site_url:
+        return ""
+    if "instagram.com" in site_url.lower():
+        return _normalizar_link_instagram(site_url)
+    return buscar_instagram(site_url, contador=contador)
+
+
 def montar_linha(lugar):
     """Converte um item retornado pela Places API numa linha (dict) para a
     planilha, sem ainda resolver o Instagram (que exige acesso ao site)."""

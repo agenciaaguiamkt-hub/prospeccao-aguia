@@ -16,7 +16,7 @@ from getpass import getpass
 
 import pandas as pd
 
-from prospeccao_core import buscar_multiplas_queries, buscar_instagram, montar_linha
+from prospeccao_core import buscar_multiplas_queries, resolver_instagram, montar_linha
 
 # Uma ou mais buscas. Cada busca tem um teto próprio de resultados (perto
 # de ~60 na prática) - se acha que falta gente, adicione mais linhas mais
@@ -58,7 +58,7 @@ def main():
         linha = montar_linha(lugar)
         site = linha["Site"]
         print(f"Verificando site: {linha['Nome'] or '(sem nome)'}")
-        linha["Instagram"] = buscar_instagram(site, contador=contador_sites) if site else ""
+        linha["Instagram"] = resolver_instagram(site, contador=contador_sites) if site else ""
         linhas.append(linha)
 
     df = pd.DataFrame(linhas)

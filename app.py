@@ -42,7 +42,7 @@ import math
 from prospeccao_core import (
     buscar_multiplas_queries,
     buscar_cidade_completa,
-    buscar_instagram,
+    resolver_instagram,
     montar_linha,
 )
 
@@ -209,7 +209,7 @@ if enviar:
         linha = montar_linha(lugar)
         status.write(f"Verificando: {linha['Nome'] or '(sem nome)'}")
         if buscar_ig and linha["Site"]:
-            linha["Instagram"] = buscar_instagram(linha["Site"], contador=contador_sites)
+            linha["Instagram"] = resolver_instagram(linha["Site"], contador=contador_sites)
         else:
             linha["Instagram"] = ""
         linhas.append(linha)
