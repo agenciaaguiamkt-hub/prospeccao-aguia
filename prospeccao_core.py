@@ -13,6 +13,7 @@ st.secrets, dependendo de onde o código está rodando).
 import math
 import re
 import time
+import unicodedata
 
 import requests
 
@@ -163,7 +164,44 @@ def gerar_grade(lat_centro, lng_centro, largura_km, altura_km, espacamento_km):
     return pontos
 
 
-def buscar_cidade_completa(
+import time
+def _normalizar_texto(txt):
+    """Remove acentos e baixa a caixa, para comparar nomes de cidade de
+    forma tolerante a variação de grafia (ex.: 'São José' == 'sao jose')."""
+    if not txt:
+        return ""
+    nfkd = unicodedata.normalize("NFKD", txt)
+    sem_acento = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return sem_acento.lower()
+
+
+def _extrair_nome_cidade(cidade_busca):
+    """Extrai só o nome da cidade de um texto tipo 'Floreal SP', removendo
+    a sigla do estado no final quando presente (token isolado de 2 letras)."""
+    texto = cidade_busca.strip()
+    partes = texto.split()
+    if len(partes) >= 2 and len(partes[-1]) == 2 and partes[-1].isalpha():
+        return " ".join(partes[:-1])
+    return texto
+
+
+def _endereco_pertence_a_cidade(endereco, cidade_busca):
+    """Confere se o endereço devolvido pela API é realmente da cidade
+    buscada (nome da cidade aparece como substring do endereço formatado).
+    O locationBias da Text Search (New) é só uma dica de onde procurar, não
+    um filtro rígido - quando a categoria é rara numa cidade pequena, o
+    Google preenche a resposta com estabelecimentos de cidades vizinhas."""
+    if not endereco:
+        return False
+    nome_cidade = _normalizar_texto(_extrair_nome_cidade(cidade_busca))
+    if not nome_cidade:
+        return True
+    return nome_cidade in _normalizar_texto(endereco)
+
+
+def buscar_cidade_completa(import unicodedata
+
+import requests
     categoria,
     cidade,
     api_key,
@@ -172,6 +210,7 @@ def buscar_cidade_completa(
     espacamento_km=4,
     contador=None,
     progresso_callback=None,
+    estatisticas=None,
 ):
     """Busca TODOS os estabelecimentos de `categoria` (ex.: "clínica de
     estética") numa cidade, contornando o teto de ~60 resultados por
@@ -230,7 +269,17 @@ def buscar_cidade_completa(
             vistos.add(chave)
             combinados.append(lugar)
 
-    return combinados
+    combinados_da_cidade = [
+        lugar for lugar in combinados
+        if _endereco_pertence_a_cidade(lugar.get("formattedAddress", ""), cidade)
+    ]
+
+    if estatisticas is not None:
+        estatisticas["total_bruto"] = len(combinados)
+        estatisticas["total_filtrado"] = len(combinados_da_cidade)
+        estatisticas["removidos"] = len(combinados) - len(combinados_da_cidade)
+
+    return combinados_da_cidade
 
 
 def buscar_multiplas_queries(queries, api_key, max_resultados_por_query=None, contador=None):
@@ -371,11 +420,67 @@ def resolver_instagram(site_url, contador=None):
     return buscar_instagram(site_url, contador=contador)
 
 
+# Lista de primeiros nomes comuns no Brasil, usada só para tentar
+# identificar se o NOME DO ESTABELECIMENTO cita o nome do dono/responsável
+# (comum em pequenos negócios, ex.: "Murilo Pneus", "Auto Mecânica do Zé").
+# AVISO IMPORTANTE: isso não é dado oficial da Places API (ela não tem campo
+# de "proprietário") - é um PALPITE por texto. Pode errar (nome de bairro ou
+# cidade que coincide com um nome próprio, apelido, etc.) e não cobre todo
+# nome brasileiro. Trate sempre como "a confirmar", nunca como fato.
+NOMES_BR = {
+    "joao","jose","antonio","francisco","carlos","paulo","pedro","lucas","luiz","marcos",
+    "luis","gabriel","rafael","daniel","marcelo","bruno","eduardo","felipe","rodrigo",
+    "marcio","andre","edson","fabio","alexandre","fernando","gustavo","ricardo","claudio",
+    "roberto","sergio","vinicius","adriano","leandro","mario","wagner","henrique","diego",
+    "ailton","alessandro","anderson","cesar","cicero","cristiano","denis","douglas","elias",
+    "emerson","everton","geraldo","gilmar","guilherme","helio","hugo","ivan","jair",
+    "jefferson","jorge","julio","junior","leonardo","maicon","manoel","mauricio","milton",
+    "moacir","nelson","nilton","osvaldo","otavio","reinaldo","renato","robson","rogerio",
+    "ronaldo","samuel","sandro","tiago","valdemir","valter","vicente","victor","vitor",
+    "walter","wellington","william","maria","ana","francisca","antonia","adriana","juliana",
+    "marcia","fernanda","patricia","aline","sandra","camila","amanda","bruna","jessica",
+    "leticia","julia","luciana","vanessa","mariana","gabriela","valeria","simone","cristina",
+    "daniela","debora","monica","sonia","tatiane","vera","viviane","claudia","denise",
+    "elaine","eliane","fabiana","ivone","jaqueline","karina","kelly","luzia","marta",
+    "michele","natalia","priscila","raquel","regina","renata","roberta","silvana","silvia",
+    "suzana","teresa","thais","paulinho","zezinho","toninho","tonho","nene","bizo","helinho",
+    "elinho","kendi","chico","gordo","indio","zeca","juninho","edu","edinho","reginaldo",
+    "adilson","alberto","aldo","arnaldo","arthur","augusto","benedito","cassio","celso",
+    "davi","david","dirceu","edilson","edimar","edivaldo","emanuel","emilio","erasmo",
+    "estevao","euclides","eugenio","ezequiel","filipe","flavio","gerson","gilson",
+    "heitor","ismael","israel","itamar","jacinto","jacob","jarbas","jeferson","jeronimo",
+    "joaquim","joel","jonas","jonatas","josue","leomar","lucio","luciano","luizinho",
+    "marciano","mateus","matheus","mauro","messias","miguel","murilo","neto","nivaldo",
+    "odair","olavo","orlando","oswaldo","pascoal","raul","romario","romeu","romulo",
+    "sebastiao","severino","silvio","tadeu","teodoro","tobias","ulisses","valdomiro",
+    "valentim","valmir","vanderlei","vilson","wanderson","wilson","xavier","zacarias",
+}
+
+_PREFIXOS_SANTO = {"sao", "santo", "santa"}
+
+
+def extrair_nome_provavel(nome_estabelecimento):
+    """Tenta achar um primeiro nome brasileiro comum dentro do nome do
+    estabelecimento. Ignora um nome logo após 'São/Santo/Santa' (evita
+    confundir nome de santo/bairro com nome de pessoa, ex.: 'São Miguel').
+    Heurística, não confirmação - pode ter falsos positivos/negativos."""
+    tokens = re.findall(r"[A-Za-zÀ-ÿ]+", nome_estabelecimento)
+    for i, tok in enumerate(tokens):
+        norm = _normalizar_texto(tok)
+        if norm not in NOMES_BR:
+            continue
+        if i > 0 and _normalizar_texto(tokens[i - 1]) in _PREFIXOS_SANTO:
+            continue
+        return tok
+    return ""
+
+
 def montar_linha(lugar):
     """Converte um item retornado pela Places API numa linha (dict) para a
     planilha, sem ainda resolver o Instagram (que exige acesso ao site)."""
     return {
         "Nome": lugar.get("displayName", {}).get("text", ""),
+        "Provável nome do dono (não confirmado)": extrair_nome_provavel(lugar.get("displayName", {}).get("text", "")),
         "Endereço": lugar.get("formattedAddress", ""),
         "Telefone": lugar.get("nationalPhoneNumber", ""),
         "É celular?": eh_celular(lugar.get("nationalPhoneNumber", "")),
