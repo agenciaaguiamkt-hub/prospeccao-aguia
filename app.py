@@ -190,6 +190,7 @@ if enviar:
 
     contador_api = {"chamadas": 0}
     contador_sites = {"chamadas": 0}
+    estatisticas_cobertura = {}
 
     if modo == "Cobertura total da cidade (recomendado)":
         if not categoria or not cidade:
@@ -214,6 +215,7 @@ if enviar:
                     espacamento_km=espacamento_km,
                     contador=contador_api,
                     progresso_callback=_callback_progresso,
+                    estatisticas=estatisticas_cobertura,
                 )
             except RuntimeError as e:
                 st.error(str(e))
@@ -235,7 +237,16 @@ if enviar:
                 st.error(str(e))
                 st.stop()
 
-    st.success(f"{len(lugares)} lugares encontrados (após remover duplicados).")
+    if estatisticas_cobertura.get("removidos"):
+        st.success(
+            f"{len(lugares)} lugares encontrados em {cidade} "
+            f"(de {estatisticas_cobertura['total_bruto']} resultados brutos da região, "
+            f"{estatisticas_cobertura['removidos']} foram descartados por serem de outras "
+            "cidades - o locationBias da Places API é só uma dica de área, não um filtro "
+            "rígido)."
+        )
+    else:
+        st.success(f"{len(lugares)} lugares encontrados (após remover duplicados).")
 
     linhas = []
     progresso = st.progress(0.0)
