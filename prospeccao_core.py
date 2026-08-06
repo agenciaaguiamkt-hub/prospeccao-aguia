@@ -199,9 +199,7 @@ def _endereco_pertence_a_cidade(endereco, cidade_busca):
     return nome_cidade in _normalizar_texto(endereco)
 
 
-def buscar_cidade_completa(import unicodedata
-
-import requests
+def buscar_cidade_completa(
     categoria,
     cidade,
     api_key,
