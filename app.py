@@ -232,7 +232,7 @@ if enviar:
                     espacamento_km=espacamento_km,
                     contador=contador_api,
                     progresso_callback=_callback_progresso,
-                }
+                )
             except RuntimeError as e:
                 st.error(str(e))
                 st.stop()
