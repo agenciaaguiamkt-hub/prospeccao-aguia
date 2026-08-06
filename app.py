@@ -110,24 +110,79 @@ modo = st.radio(
     ),
 )
 
+# Presets de cobertura: escondem os detalhes técnicos (km/espaçamento) por
+# trás de 3 opções em linguagem simples. Cada uma já vem calibrada com uma
+# combinação de área + espaçamento que funciona bem para aquele perfil.
+COBERTURA_PRESETS = {
+    "rapido": {
+        "emoji": "🟢",
+        "nome": "Teste rápido",
+        "desc": "Área pequena ao redor do centro da cidade. Ideal para testar antes de gastar mais.",
+        "largura": 10, "altura": 10, "espacamento": 5,
+        "cor_fundo": "#E8F5E9", "cor_borda": "#66BB6A",
+    },
+    "padrao": {
+        "emoji": "🔵",
+        "nome": "Padrão (recomendado)",
+        "desc": "Bom equilíbrio entre completude e custo para a maioria das cidades médias.",
+        "largura": 20, "altura": 20, "espacamento": 4,
+        "cor_fundo": "#E3F2FD", "cor_borda": "#42A5F5",
+    },
+    "maximo": {
+        "emoji": "🟣",
+        "nome": "Cobertura máxima",
+        "desc": "Área maior e grade mais fina. Mais completo, porém mais chamadas à API (mais custo).",
+        "largura": 35, "altura": 35, "espacamento": 3,
+        "cor_fundo": "#F3E5F5", "cor_borda": "#AB47BC",
+    },
+}
+
+
+def _estimar_chamadas(largura_km, altura_km, espacamento_km):
+    n_pontos = (math.ceil(largura_km / espacamento_km) + 1) * (
+        math.ceil(altura_km / espacamento_km) + 1
+    )
+    return n_pontos + 1  # +1 da chamada para localizar a cidade
+
+
 with st.form("busca"):
     if modo == "Cobertura total da cidade (recomendado)":
         categoria = st.text_input("Categoria de negócio", value="clínica de estética")
         cidade = st.text_input("Cidade", value="Votuporanga SP")
-        with st.expander("Ajustar área da grade (avançado)"):
-            largura_km = st.slider("Largura da área (km)", 5, 60, 20, step=5)
-            altura_km = st.slider("Altura da área (km)", 5, 60, 20, step=5)
-            espacamento_km = st.slider("Espaçamento entre pontos (km)", 1, 10, 4, step=1)
-            n_pontos = (math.ceil(largura_km / espacamento_km) + 1) * (
-                math.ceil(altura_km / espacamento_km) + 1
-            )
-            st.caption(
-                f"≈ {n_pontos} pontos de busca + 1 chamada para localizar a "
-                f"cidade = pelo menos {n_pontos + 1} chamadas à Places API "
-                "(pode ser mais se algum ponto tiver mais de 20 resultados e "
-                "precisar de páginas extras). Espaçamento menor = mais "
-                "completo, porém mais chamadas."
-            )
+
+        preset_key = st.radio(
+            "Área de cobertura",
+            list(COBERTURA_PRESETS.keys()),
+            format_func=lambda k: f"{COBERTURA_PRESETS[k]['emoji']} {COBERTURA_PRESETS[k]['nome']}",
+            index=1,
+            horizontal=True,
+        )
+        p = COBERTURA_PRESETS[preset_key]
+        largura_km, altura_km, espacamento_km = p["largura"], p["altura"], p["espacamento"]
+        estimativa = _estimar_chamadas(largura_km, altura_km, espacamento_km)
+
+        st.markdown(
+            f"""<div style="background:{p['cor_fundo']};border:1px solid {p['cor_borda']};
+            border-radius:8px;padding:12px 16px;margin-bottom:6px;color:#1a1a1a;">
+            <strong>{p['desc']}</strong><br>
+            <span style="font-size:0.85em;">≈ {estimativa} chamadas à Places API nesta busca
+            (pode ser mais se algum ponto tiver mais de 20 resultados).</span>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+        with st.expander("Personalizar manualmente (avançado)"):
+            personalizar = st.checkbox("Ajustar a área em km manualmente")
+            if personalizar:
+                largura_km = st.slider("Largura da área (km)", 5, 60, p["largura"], step=5)
+                altura_km = st.slider("Altura da área (km)", 5, 60, p["altura"], step=5)
+                espacamento_km = st.slider("Espaçamento entre pontos (km)", 1, 10, p["espacamento"], step=1)
+                st.caption(
+                    f"≈ {_estimar_chamadas(largura_km, altura_km, espacamento_km)} chamadas "
+                    "à Places API com esses valores. Espaçamento menor = mais completo, "
+                    "porém mais chamadas."
+                )
+
         queries_texto = ""
     else:
         categoria = cidade = ""
@@ -177,7 +232,7 @@ if enviar:
                     espacamento_km=espacamento_km,
                     contador=contador_api,
                     progresso_callback=_callback_progresso,
-                )
+                }
             except RuntimeError as e:
                 st.error(str(e))
                 st.stop()
@@ -236,5 +291,5 @@ if enviar:
     st.info(
         f"Chamadas à Places API: **{contador_api['chamadas']}** · "
         f"Acessos a sites (não é API do Google): **{contador_sites['chamadas']}** · "
-        f"Buscas usadas nesta sessão: **{st.session_state.buscas_feitas}/{LIMITE_BUSCAS_POR_SESSAO}**"
+        f"Buscas usadas nesta sessão: **{st.session_state.buscas_feitas}/{LIMITE_BUSCAS_POR_SESSAN}**"
     )
