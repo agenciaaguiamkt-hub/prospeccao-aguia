@@ -291,5 +291,5 @@ if enviar:
     st.info(
         f"Chamadas à Places API: **{contador_api['chamadas']}** · "
         f"Acessos a sites (não é API do Google): **{contador_sites['chamadas']}** · "
-        f"Buscas usadas nesta sessão: **{st.session_state.buscas_feitas}/{LIMITE_BUSCAS_POR_SESSAN}**"
+        f"Buscas usadas nesta sessão: **{st.session_state.buscas_feitas}/{LIMITE_BUSCAS_POR_SESSAO}**"
     )
