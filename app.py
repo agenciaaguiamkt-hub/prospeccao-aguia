@@ -114,13 +114,6 @@ modo = st.radio(
 # trás de 3 opções em linguagem simples. Cada uma já vem calibrada com uma
 # combinação de área + espaçamento que funciona bem para aquele perfil.
 COBERTURA_PRESETS = {
-    "rapido": {
-        "emoji": "🟢",
-        "nome": "Teste rápido",
-        "desc": "Área pequena ao redor do centro da cidade. Ideal para testar antes de gastar mais.",
-        "largura": 10, "altura": 10, "espacamento": 5,
-        "cor_fundo": "#E8F5E9", "cor_borda": "#66BB6A",
-    },
     "padrao": {
         "emoji": "🔵",
         "nome": "Padrão (recomendado)",
@@ -154,7 +147,7 @@ with st.form("busca"):
             "Área de cobertura",
             list(COBERTURA_PRESETS.keys()),
             format_func=lambda k: f"{COBERTURA_PRESETS[k]['emoji']} {COBERTURA_PRESETS[k]['nome']}",
-            index=1,
+            index=0,
             horizontal=True,
         )
         p = COBERTURA_PRESETS[preset_key]
@@ -171,17 +164,6 @@ with st.form("busca"):
             unsafe_allow_html=True,
         )
 
-        with st.expander("Personalizar manualmente (avançado)"):
-            personalizar = st.checkbox("Ajustar a área em km manualmente")
-            if personalizar:
-                largura_km = st.slider("Largura da área (km)", 5, 60, p["largura"], step=5)
-                altura_km = st.slider("Altura da área (km)", 5, 60, p["altura"], step=5)
-                espacamento_km = st.slider("Espaçamento entre pontos (km)", 1, 10, p["espacamento"], step=1)
-                st.caption(
-                    f"≈ {_estimar_chamadas(largura_km, altura_km, espacamento_km)} chamadas "
-                    "à Places API com esses valores. Espaçamento menor = mais completo, "
-                    "porém mais chamadas."
-                )
 
         queries_texto = ""
     else:
@@ -193,7 +175,7 @@ with st.form("busca"):
             height=100,
         )
 
-    buscar_ig = st.checkbox("Também procurar Instagram nos sites (mais lento)", value=True)
+    buscar_ig = True  # busca de Instagram é padrão, sem opção de desligar
     enviar = st.form_submit_button("Buscar")
 
 if enviar:
