@@ -247,7 +247,7 @@ if modo == "Busca por CNAE (dados da Receita Federal)":
         </div>
         <div style="font-size:0.78em;opacity:0.75;margin-top:8px;">
         É um teto, não uma cobrança garantida: se a cidade tiver menos empresas
-        que isso, você paga menos. Base de cálculo: R$ {_reais(CUSTO_CNPJ_BRL)} por
+        que isso, você paga menos. Base de cálculo: R$ {f"{CUSTO_CNPJ_BRL:.3f}".replace(".", ",")} por
         CNPJ (plano Básico 1) e US$ {CUSTO_PLACES_USD:.3f} por consulta ao Google
         a US$ 1 = R$ {_reais(DOLAR_BRL)}. Valores de 07/08/2026 - confirme na sua
         fatura, principalmente a cotação.
