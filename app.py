@@ -46,11 +46,19 @@ from prospeccao_core import (
     montar_linha,
 )
 
+from cnae_core import (
+    normalizar_cnaes,
+    buscar_empresas_por_cnae,
+    buscar_no_google,
+    montar_linha_cnae,
+)
+
 st.set_page_config(page_title="Prospecção de Clínicas", page_icon="🔎")
 
 # ----------------------- CONFIG / SECRETS -----------------------
 API_KEY = st.secrets.get("GOOGLE_PLACES_API_KEY", "")
 APP_PASSWORD = st.secrets.get("APP_PASSWORD", "")
+CASA_DOS_DADOS_API_KEY = st.secrets.get("CASA_DOS_DADOS_API_KEY", "")
 LIMITE_BUSCAS_POR_SESSAO = 20  # trava simples contra abuso, não é robusta
 
 if not API_KEY:
@@ -99,7 +107,11 @@ st.caption(
 
 modo = st.radio(
     "Modo de busca",
-    ["Cobertura total da cidade (recomendado)", "Buscas manuais (uma por linha)"],
+    [
+        "Cobertura total da cidade (recomendado)",
+        "Busca por CNAE (dados da Receita Federal)",
+        "Buscas manuais (uma por linha)",
+    ],
     help=(
         "A Places API tem um teto prático de resultados por chamada (perto de "
         "~60 - comportamento observado do Google, não uma trava deste app). "
@@ -166,9 +178,70 @@ with st.form("busca"):
 
 
         queries_texto = ""
+        cnae_texto = uf_cnae = municipio_cnae = ""
+        limite_cnae = 100
+        enriquecer_google = True
+    elif modo == "Busca por CNAE (dados da Receita Federal)":
+        categoria = cidade = ""
+        largura_km = altura_km = espacamento_km = None
+        queries_texto = ""
+
+        cnae_texto = st.text_input(
+            "Código CNAE",
+            value="4520001",
+            help=(
+                "O código oficial da atividade econômica, como está no cadastro da "
+                "Receita Federal. Pode digitar com ou sem pontuação (4520-0/01 ou "
+                "4520001) e pode colocar vários separados por vírgula. Se não souber "
+                "o código, procure em concla.ibge.gov.br."
+            ),
+        )
+        col_uf, col_mun = st.columns([1, 3])
+        with col_uf:
+            uf_cnae = st.text_input("UF", value="SP")
+        with col_mun:
+            municipio_cnae = st.text_input("Município", value="Votuporanga")
+
+        limite_cnae = st.number_input(
+            "Máximo de empresas a trazer",
+            min_value=10,
+            max_value=2000,
+            value=100,
+            step=10,
+            help=(
+                "Este número controla o custo: a Casa dos Dados cobra por CNPJ "
+                "retornado. Comece baixo para conferir se o CNAE está certo."
+            ),
+        )
+        enriquecer_google = st.checkbox(
+            "Procurar link do Google Meu Negócio, telefone e site de cada empresa",
+            value=True,
+            help=(
+                "O cadastro de CNPJ não tem essas informações. Marcando aqui, cada "
+                "empresa é procurada também na Places API pelo nome - 1 chamada por "
+                "empresa. Nem sempre acha (empresa sem perfil no Google, ou com nome "
+                "de fachada diferente do nome na Receita)."
+            ),
+        )
+
+        custo_cdd = float(limite_cnae) * 0.01
+        st.markdown(
+            f"""<div style="background:#FFF8E1;border:1px solid #FFB74D;
+            border-radius:8px;padding:12px 16px;margin-bottom:6px;color:#1a1a1a;">
+            <strong>Custo estimado desta busca</strong><br>
+            <span style="font-size:0.85em;">Até R$ {custo_cdd:.2f} em créditos da Casa
+            dos Dados (R$ 0,01 por CNPJ, valor conferido em agosto/2026 - confirme em
+            portal.casadosdados.com.br/precos)
+            {"+ até " + str(limite_cnae) + " chamadas à Places API." if enriquecer_google else "."}
+            </span></div>""",
+            unsafe_allow_html=True,
+        )
     else:
         categoria = cidade = ""
         largura_km = altura_km = espacamento_km = None
+        cnae_texto = uf_cnae = municipio_cnae = ""
+        limite_cnae = 100
+        enriquecer_google = True
         queries_texto = st.text_area(
             "O que buscar (uma busca por linha, igual você digitaria no Google Maps)",
             value="clínica de estética em Votuporanga SP",
@@ -190,9 +263,66 @@ if enviar:
 
     contador_api = {"chamadas": 0}
     contador_sites = {"chamadas": 0}
+    contador_cdd = {"chamadas": 0}
     estatisticas_cobertura = {}
+    linhas_prontas = None  # o modo CNAE monta as linhas por conta própria
 
-    if modo == "Cobertura total da cidade (recomendado)":
+    if modo == "Busca por CNAE (dados da Receita Federal)":
+        cnaes = normalizar_cnaes(cnae_texto)
+        if not cnaes:
+            st.error("Informe ao menos um código CNAE (só números, ex.: 4520001).")
+            st.stop()
+
+        with st.spinner("Consultando o cadastro de CNPJ da Receita Federal..."):
+            try:
+                empresas = buscar_empresas_por_cnae(
+                    CASA_DOS_DADOS_API_KEY,
+                    cnaes,
+                    uf_cnae,
+                    municipio_cnae,
+                    limite_total=int(limite_cnae),
+                    contador=contador_cdd,
+                )
+            except RuntimeError as e:
+                st.error(str(e))
+                st.stop()
+
+        if not empresas:
+            st.warning(
+                "Nenhuma empresa encontrada com esse CNAE nesse município. "
+                "Confira se o código CNAE e o nome do município estão certos."
+            )
+            st.stop()
+
+        st.success(
+            f"{len(empresas)} empresas encontradas com CNAE {', '.join(cnaes)} "
+            f"em {municipio_cnae}-{uf_cnae.upper()}."
+        )
+
+        linhas_prontas = []
+        progresso_cnae = st.progress(0.0)
+        status_cnae = st.empty()
+        total_emp = len(empresas) or 1
+
+        for i, empresa in enumerate(empresas):
+            nome = (empresa.get("nome_fantasia") or empresa.get("razao_social") or "").strip()
+            dados_google = {}
+            if enriquecer_google:
+                status_cnae.write(f"Procurando no Google: {nome or '(sem nome)'}")
+                dados_google = buscar_no_google(
+                    nome,
+                    (empresa.get("endereco", {}) or {}).get("municipio", ""),
+                    (empresa.get("endereco", {}) or {}).get("uf", ""),
+                    API_KEY,
+                    contador=contador_api,
+                )
+            linhas_prontas.append(montar_linha_cnae(empresa, dados_google))
+            progresso_cnae.progress((i + 1) / total_emp)
+
+        status_cnae.empty()
+        progresso_cnae.empty()
+
+    elif modo == "Cobertura total da cidade (recomendado)":
         if not categoria or not cidade:
             st.error("Preencha categoria e cidade.")
             st.stop()
@@ -237,7 +367,9 @@ if enviar:
                 st.error(str(e))
                 st.stop()
 
-    if estatisticas_cobertura.get("removidos"):
+    if linhas_prontas is not None:
+        linhas = linhas_prontas
+    elif estatisticas_cobertura.get("removidos"):
         st.success(
             f"{len(lugares)} lugares encontrados em {cidade} "
             f"(de {estatisticas_cobertura['total_bruto']} resultados brutos da região, "
@@ -248,23 +380,24 @@ if enviar:
     else:
         st.success(f"{len(lugares)} lugares encontrados (após remover duplicados).")
 
-    linhas = []
-    progresso = st.progress(0.0)
-    status = st.empty()
-    total = len(lugares) or 1
+    if linhas_prontas is None:
+        linhas = []
+        progresso = st.progress(0.0)
+        status = st.empty()
+        total = len(lugares) or 1
 
-    for i, lugar in enumerate(lugares):
-        linha = montar_linha(lugar)
-        status.write(f"Verificando: {linha['Nome'] or '(sem nome)'}")
-        if buscar_ig and linha["Site"]:
-            linha["Instagram"] = resolver_instagram(linha["Site"], contador=contador_sites)
-        else:
-            linha["Instagram"] = ""
-        linhas.append(linha)
-        progresso.progress((i + 1) / total)
+        for i, lugar in enumerate(lugares):
+            linha = montar_linha(lugar)
+            status.write(f"Verificando: {linha['Nome'] or '(sem nome)'}")
+            if buscar_ig and linha["Site"]:
+                linha["Instagram"] = resolver_instagram(linha["Site"], contador=contador_sites)
+            else:
+                linha["Instagram"] = ""
+            linhas.append(linha)
+            progresso.progress((i + 1) / total)
 
-    status.empty()
-    progresso.empty()
+        status.empty()
+        progresso.empty()
 
     df = pd.DataFrame(linhas)
     st.dataframe(df, use_container_width=True)
@@ -283,6 +416,7 @@ if enviar:
 
     st.info(
         f"Chamadas à Places API: **{contador_api['chamadas']}** · "
+        f"Chamadas à Casa dos Dados: **{contador_cdd['chamadas']}** · "
         f"Acessos a sites (não é API do Google): **{contador_sites['chamadas']}** · "
         f"Buscas usadas nesta sessão: **{st.session_state.buscas_feitas}/{LIMITE_BUSCAS_POR_SESSAO}**"
     )
