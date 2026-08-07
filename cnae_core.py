@@ -103,7 +103,17 @@ def buscar_empresas_por_cnae(
         if municipio:
             corpo["municipio"] = [municipio.strip().lower()]
 
-        resp = requests.post(URL_PESQUISA, json=corpo, headers=headers, timeout=60)
+        # tipo_resultado=completo e OBRIGATORIO para vir endereco, socios,
+        # data de abertura, porte etc. O padrao da API e "simples", que
+        # devolve so CNPJ, razao social, nome fantasia e situacao - foi o
+        # que gerou a primeira planilha quase vazia.
+        resp = requests.post(
+            URL_PESQUISA,
+            json=corpo,
+            headers=headers,
+            params={"tipo_resultado": "completo"},
+            timeout=60,
+        )
         if contador is not None:
             contador["chamadas"] = contador.get("chamadas", 0) + 1
 
@@ -212,31 +222,93 @@ def eh_celular(telefone):
     return "indeterminado"
 
 
+def formatar_cnpj(cnpj):
+    """00.000.000/0000-00 - sem isso o Excel trata como numero e come o
+    zero a esquerda."""
+    d = "".join(c for c in str(cnpj or "") if c.isdigit())
+    if len(d) != 14:
+        return str(cnpj or "")
+    return f"{d[0:2]}.{d[2:5]}.{d[5:8]}/{d[8:12]}-{d[12:14]}"
+
+
+def _primeiro_texto(dic, *chaves):
+    """Devolve o primeiro valor nao vazio entre varias chaves possiveis.
+    Serve porque a doc da Casa dos Dados nao lista telefone/email na
+    resposta, mas a API tem filtro por telefone e por 'com_email' - ou
+    seja, o dado existe no banco deles e pode vir com outro nome de campo.
+    Se nao vier nada, a coluna simplesmente fica vazia."""
+    for chave in chaves:
+        valor = dic.get(chave)
+        if isinstance(valor, list) and valor:
+            valor = valor[0]
+        if isinstance(valor, dict):
+            valor = valor.get("numero") or valor.get("valor") or valor.get("email")
+        if valor and str(valor).strip():
+            return str(valor).strip()
+    return ""
+
+
+def _telefone_receita(empresa):
+    contato = empresa.get("contato", {}) or {}
+    alvo = contato if isinstance(contato, dict) and contato else empresa
+    return _primeiro_texto(
+        alvo, "telefone", "telefones", "telefone1", "ddd_telefone_1", "telefone_1"
+    )
+
+
+def _email_receita(empresa):
+    contato = empresa.get("contato", {}) or {}
+    alvo = contato if isinstance(contato, dict) and contato else empresa
+    return _primeiro_texto(alvo, "email", "emails", "email1", "correio_eletronico")
+
+
 def montar_linha_cnae(empresa, dados_google=None):
     """Converte uma empresa da Casa dos Dados (+ o que o Google achou) numa
     linha da planilha."""
     dados_google = dados_google or {}
     end = empresa.get("endereco", {}) or {}
     situacao = empresa.get("situacao_cadastral", {}) or {}
-    telefone = dados_google.get("nationalPhoneNumber", "")
+    porte = empresa.get("porte_empresa", {}) or {}
+
+    tel_google = dados_google.get("nationalPhoneNumber", "")
+    tel_receita = _telefone_receita(empresa)
+    telefone = tel_google or tel_receita
 
     nome_fantasia = (empresa.get("nome_fantasia") or "").strip()
     razao_social = (empresa.get("razao_social") or "").strip()
+
+    capital = empresa.get("capital_social")
+    capital_txt = ""
+    if capital not in (None, "", 0):
+        try:
+            capital_txt = f"R$ {float(capital):,.2f}".replace(",", "@").replace(
+                ".", ","
+            ).replace("@", ".")
+        except (TypeError, ValueError):
+            capital_txt = str(capital)
 
     return {
         "Nome do estabelecimento": nome_fantasia or razao_social,
         "Razao social": razao_social,
         "Socios (Receita Federal)": _nomes_socios(empresa),
-        "CNPJ": empresa.get("cnpj", ""),
-        "Endereco": _texto_endereco(empresa),
-        "Municipio": end.get("municipio", ""),
-        "UF": end.get("uf", ""),
-        "Situacao cadastral": situacao.get("situacao_cadastral", ""),
-        "Data de abertura": empresa.get("data_abertura", ""),
-        "Google Meu Negocio": dados_google.get("googleMapsUri", ""),
-        "Telefone (Google)": telefone,
+        "Telefone": telefone,
         "E celular?": eh_celular(telefone),
+        "Origem do telefone": ("Google" if tel_google else ("Receita" if tel_receita else "")),
+        "Email": _email_receita(empresa),
+        "Google Meu Negocio": dados_google.get("googleMapsUri", ""),
         "Site": dados_google.get("websiteUri", ""),
         "Nota": dados_google.get("rating", ""),
         "N de avaliacoes": dados_google.get("userRatingCount", ""),
+        "CNPJ": formatar_cnpj(empresa.get("cnpj", "")),
+        "Endereco": _texto_endereco(empresa),
+        "Bairro": end.get("bairro", ""),
+        "Municipio": end.get("municipio", ""),
+        "UF": end.get("uf", ""),
+        "CEP": end.get("cep", ""),
+        "Situacao cadastral": situacao.get("situacao_cadastral", ""),
+        "Data de abertura": empresa.get("data_abertura", ""),
+        "Porte": porte.get("descricao", ""),
+        "Capital social": capital_txt,
+        "Natureza juridica": empresa.get("descricao_natureza_juridica", ""),
+        "Matriz ou filial": empresa.get("matriz_filial", ""),
     }
