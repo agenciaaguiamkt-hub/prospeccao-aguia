@@ -349,6 +349,14 @@ if enviar:
             f"em {municipio_cnae}-{uf_cnae.upper()}."
         )
 
+        with st.expander("Ver os dados crus da 1ª empresa (diagnóstico)"):
+            st.caption(
+                "Mostra exatamente o que a Casa dos Dados devolveu. Serve para "
+                "conferir se algum campo que você precisa existe mas não está "
+                "sendo aproveitado na planilha."
+            )
+            st.json(empresas[0])
+
         linhas_prontas = []
         progresso_cnae = st.progress(0.0)
         status_cnae = st.empty()
