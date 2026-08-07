@@ -150,106 +150,156 @@ def _estimar_chamadas(largura_km, altura_km, espacamento_km):
     return n_pontos + 1  # +1 da chamada para localizar a cidade
 
 
-with st.form("busca"):
-    if modo == "Cobertura total da cidade (recomendado)":
-        categoria = st.text_input("Categoria de negócio", value="clínica de estética")
-        cidade = st.text_input("Cidade", value="Votuporanga SP")
-
-        preset_key = st.radio(
-            "Área de cobertura",
-            list(COBERTURA_PRESETS.keys()),
-            format_func=lambda k: f"{COBERTURA_PRESETS[k]['emoji']} {COBERTURA_PRESETS[k]['nome']}",
-            index=0,
-            horizontal=True,
-        )
-        p = COBERTURA_PRESETS[preset_key]
-        largura_km, altura_km, espacamento_km = p["largura"], p["altura"], p["espacamento"]
-        estimativa = _estimar_chamadas(largura_km, altura_km, espacamento_km)
-
-        st.markdown(
-            f"""<div style="background:{p['cor_fundo']};border:1px solid {p['cor_borda']};
-            border-radius:8px;padding:12px 16px;margin-bottom:6px;color:#1a1a1a;">
-            <strong>{p['desc']}</strong><br>
-            <span style="font-size:0.85em;">≈ {estimativa} chamadas à Places API nesta busca
-            (pode ser mais se algum ponto tiver mais de 20 resultados).</span>
-            </div>""",
-            unsafe_allow_html=True,
-        )
+# ----------------------- TABELA DE CUSTOS -----------------------
+# Valores conferidos em 07/08/2026. Os três podem mudar sem aviso - se a
+# conta não bater com a fatura, é aqui que se ajusta.
+#
+# CUSTO_CNPJ_BRL: plano Básico 1 da Casa dos Dados (R$ 29,90/mês por 5.000
+#   consultas = R$ 0,006 por CNPJ). Se você trocar de plano, troque aqui.
+# CUSTO_PLACES_USD: a Places API cobra por SKU conforme os campos pedidos.
+#   Como pedimos telefone, site e nota (campos do tier Enterprise), cai na
+#   faixa Text Search Enterprise, US$ 35 por 1.000 chamadas. Não tenho como
+#   confirmar esse número contra a sua fatura real daqui - confira na
+#   documentação de billing da Places API.
+#   O Google ainda dá uma franquia mensal gratuita (na casa de 1.000
+#   chamadas Enterprise/mês, valor que não consegui confirmar com 100% de
+#   certeza), então na prática as primeiras buscas do mês tendem a sair de
+#   graça. Por isso o número mostrado é um TETO, não uma cobrança certa.
+# DOLAR_BRL: cotação aproximada. Serve para dar ordem de grandeza, não para
+#   fechar contabilidade.
+CUSTO_CNPJ_BRL = 0.006
+CUSTO_PLACES_USD = 0.035
+DOLAR_BRL = 5.12
+CUSTO_PLACES_BRL = CUSTO_PLACES_USD * DOLAR_BRL
 
 
-        queries_texto = ""
-        cnae_texto = uf_cnae = municipio_cnae = ""
-        limite_cnae = 100
-        enriquecer_google = True
-    elif modo == "Busca por CNAE (dados da Receita Federal)":
-        categoria = cidade = ""
-        largura_km = altura_km = espacamento_km = None
-        queries_texto = ""
+def _reais(valor):
+    """Formata no padrão brasileiro: 1234.5 -> '1.234,50'."""
+    return f"{valor:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
-        cnae_texto = st.text_input(
-            "Código CNAE",
-            value="4520001",
-            help=(
-                "O código oficial da atividade econômica, como está no cadastro da "
-                "Receita Federal. Pode digitar com ou sem pontuação (4520-0/01 ou "
-                "4520001) e pode colocar vários separados por vírgula. Se não souber "
-                "o código, procure em concla.ibge.gov.br."
-            ),
-        )
-        col_uf, col_mun = st.columns([1, 3])
-        with col_uf:
-            uf_cnae = st.text_input("UF", value="SP")
-        with col_mun:
-            municipio_cnae = st.text_input("Município", value="Votuporanga")
 
-        limite_cnae = st.number_input(
-            "Máximo de empresas a trazer",
-            min_value=10,
-            max_value=2000,
-            value=100,
-            step=10,
-            help=(
-                "Este número controla o custo: a Casa dos Dados cobra por CNPJ "
-                "retornado. Comece baixo para conferir se o CNAE está certo."
-            ),
-        )
-        enriquecer_google = st.checkbox(
-            "Procurar link do Google Meu Negócio, telefone e site de cada empresa",
-            value=True,
-            help=(
-                "O cadastro de CNPJ não tem essas informações. Marcando aqui, cada "
-                "empresa é procurada também na Places API pelo nome - 1 chamada por "
-                "empresa. Nem sempre acha (empresa sem perfil no Google, ou com nome "
-                "de fachada diferente do nome na Receita)."
-            ),
-        )
+if modo == "Busca por CNAE (dados da Receita Federal)":
+    # Fora de st.form de propósito: dentro de um formulário o Streamlit só
+    # reexecuta o script quando você aperta o botão, e aí a previsão de
+    # custo ficaria congelada no valor antigo enquanto você mexe nos campos.
+    categoria = cidade = ""
+    largura_km = altura_km = espacamento_km = None
+    queries_texto = ""
 
-        custo_cdd = float(limite_cnae) * 0.01
-        st.markdown(
-            f"""<div style="background:#FFF8E1;border:1px solid #FFB74D;
-            border-radius:8px;padding:12px 16px;margin-bottom:6px;color:#1a1a1a;">
-            <strong>Custo estimado desta busca</strong><br>
-            <span style="font-size:0.85em;">Até R$ {custo_cdd:.2f} em créditos da Casa
-            dos Dados (R$ 0,01 por CNPJ, valor conferido em agosto/2026 - confirme em
-            portal.casadosdados.com.br/precos)
-            {"+ até " + str(limite_cnae) + " chamadas à Places API." if enriquecer_google else "."}
-            </span></div>""",
-            unsafe_allow_html=True,
-        )
-    else:
-        categoria = cidade = ""
-        largura_km = altura_km = espacamento_km = None
-        cnae_texto = uf_cnae = municipio_cnae = ""
-        limite_cnae = 100
-        enriquecer_google = True
-        queries_texto = st.text_area(
-            "O que buscar (uma busca por linha, igual você digitaria no Google Maps)",
-            value="clínica de estética em Votuporanga SP",
-            height=100,
-        )
+    cnae_texto = st.text_input(
+        "Código CNAE",
+        value="4520001",
+        help=(
+            "O código oficial da atividade econômica, como está no cadastro da "
+            "Receita Federal. Pode digitar com ou sem pontuação (4520-0/01 ou "
+            "4520001) e pode colocar vários separados por vírgula. Se não souber "
+            "o código, procure em concla.ibge.gov.br."
+        ),
+    )
+    col_uf, col_mun = st.columns([1, 3])
+    with col_uf:
+        uf_cnae = st.text_input("UF", value="SP")
+    with col_mun:
+        municipio_cnae = st.text_input("Município", value="Votuporanga")
 
-    buscar_ig = True  # busca de Instagram é padrão, sem opção de desligar
-    enviar = st.form_submit_button("Buscar")
+    limite_cnae = st.number_input(
+        "Máximo de empresas a trazer",
+        min_value=10,
+        max_value=2000,
+        value=100,
+        step=10,
+        help="Comece baixo para conferir se o CNAE está certo antes de gastar.",
+    )
+
+    enriquecer_google = st.checkbox(
+        f"Buscar telefone, site e link do Google Meu Negócio "
+        f"(+ R$ {_reais(float(limite_cnae) * CUSTO_PLACES_BRL)} nesta busca)",
+        value=True,
+        help=(
+            "O cadastro da Receita não tem telefone atualizado, site nem nota. "
+            "Marcando aqui, cada empresa é procurada no Google pelo nome, o que "
+            "custa cerca de R$ "
+            + _reais(CUSTO_PLACES_BRL)
+            + " por empresa. Desmarque para fazer uma busca "
+            "quase de graça e conferir a lista antes. Nem sempre acha: empresa sem "
+            "perfil no Google, ou com nome de fachada diferente do nome registrado."
+        ),
+    )
+
+    custo_receita = float(limite_cnae) * CUSTO_CNPJ_BRL
+    custo_google = float(limite_cnae) * CUSTO_PLACES_BRL if enriquecer_google else 0.0
+    custo_total = custo_receita + custo_google
+
+    linha_google = (
+        f"<br>Buscar cada uma no Google &nbsp;&middot;&nbsp; <strong>R$ {_reais(custo_google)}</strong>"
+        if enriquecer_google
+        else '<br><span style="opacity:0.7;">Busca no Google desligada &nbsp;&middot;&nbsp; R$ 0,00</span>'
+    )
+
+    st.markdown(
+        f"""<div style="background:#FFF8E1;border:1px solid #FFB74D;
+        border-radius:8px;padding:14px 18px;margin:8px 0 12px 0;color:#1a1a1a;">
+        <div style="font-size:1.15em;margin-bottom:6px;">
+        Esta busca custa no máximo <strong>R$ {_reais(custo_total)}</strong></div>
+        <div style="font-size:0.88em;line-height:1.6;">
+        Pegar {int(limite_cnae)} empresas na Receita Federal &nbsp;&middot;&nbsp;
+        <strong>R$ {_reais(custo_receita)}</strong>{linha_google}
+        </div>
+        <div style="font-size:0.78em;opacity:0.75;margin-top:8px;">
+        É um teto, não uma cobrança garantida: se a cidade tiver menos empresas
+        que isso, você paga menos. Base de cálculo: R$ {_reais(CUSTO_CNPJ_BRL)} por
+        CNPJ (plano Básico 1) e US$ {CUSTO_PLACES_USD:.3f} por consulta ao Google
+        a US$ 1 = R$ {_reais(DOLAR_BRL)}. Valores de 07/08/2026 - confirme na sua
+        fatura, principalmente a cotação.
+        </div></div>""",
+        unsafe_allow_html=True,
+    )
+
+    buscar_ig = True
+    enviar = st.button("Buscar", type="primary")
+else:
+    cnae_texto = uf_cnae = municipio_cnae = ""
+    limite_cnae = 100
+    enriquecer_google = True
+
+    with st.form("busca"):
+        if modo == "Cobertura total da cidade (recomendado)":
+            categoria = st.text_input("Categoria de negócio", value="clínica de estética")
+            cidade = st.text_input("Cidade", value="Votuporanga SP")
+
+            preset_key = st.radio(
+                "Área de cobertura",
+                list(COBERTURA_PRESETS.keys()),
+                format_func=lambda k: f"{COBERTURA_PRESETS[k]['emoji']} {COBERTURA_PRESETS[k]['nome']}",
+                index=0,
+                horizontal=True,
+            )
+            p = COBERTURA_PRESETS[preset_key]
+            largura_km, altura_km, espacamento_km = p["largura"], p["altura"], p["espacamento"]
+            estimativa = _estimar_chamadas(largura_km, altura_km, espacamento_km)
+
+            st.markdown(
+                f"""<div style="background:{p['cor_fundo']};border:1px solid {p['cor_borda']};
+                border-radius:8px;padding:12px 16px;margin-bottom:6px;color:#1a1a1a;">
+                <strong>{p['desc']}</strong><br>
+                <span style="font-size:0.85em;">Cerca de {estimativa} chamadas à Places API nesta
+                busca (pode ser mais se algum ponto tiver mais de 20 resultados).</span>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
+            queries_texto = ""
+        else:
+            categoria = cidade = ""
+            largura_km = altura_km = espacamento_km = None
+            queries_texto = st.text_area(
+                "O que buscar (uma busca por linha, igual você digitaria no Google Maps)",
+                value="clínica de estética em Votuporanga SP",
+                height=100,
+            )
+
+        buscar_ig = True  # buscar Instagram nos sites é padrão, sem opção de desligar
+        enviar = st.form_submit_button("Buscar")
 
 if enviar:
     if st.session_state.buscas_feitas >= LIMITE_BUSCAS_POR_SESSAO:
