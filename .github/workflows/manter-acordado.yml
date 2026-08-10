@@ -1,0 +1,55 @@
+name: Manter o app acordado
+
+# POR QUE ISSO EXISTE
+# O Streamlit Community Cloud (plano gratuito) coloca o app para dormir
+# depois de 12 horas sem ninguem acessar. Nao existe opcao para desligar
+# isso no plano gratuito - e politica da plataforma. A unica saida e
+# gerar acesso de tempos em tempos.
+#
+# Este robo abre o app a cada 6 horas com um navegador de verdade e, se
+# encontrar a tela de "Zzzz", clica no botao que acorda o app. Como roda
+# a cada 6h e o app so dorme com 12h de silencio, sobra folga mesmo se o
+# GitHub atrasar alguma execucao (a fila do cron nao e pontual).
+#
+# LIMITACAO CONHECIDA: o GitHub desativa workflows agendados quando o
+# repositorio fica 60 dias sem nenhum commit. Ele avisa por email antes.
+# Se isso acontecer, basta reativar o workflow na aba Actions.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  acordar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Instalar navegador
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Abrir o app e acordar se estiver dormindo
+        run: |
+          python - <<'FIM'
+          from playwright.sync_api import sync_playwright
+
+          URL = "https://prospeccao-aguia.streamlit.app"
+
+          with sync_playwright() as p:
+              navegador = p.chromium.launch()
+              pagina = navegador.new_page()
+              pagina.goto(URL, timeout=60000)
+              pagina.wait_for_timeout(5000)
+
+              botao = pagina.get_by_text("get this app back up", exact=False)
+              if botao.count() > 0:
+                  print("O app estava dormindo. Acordando...")
+                  botao.first.click()
+                  pagina.wait_for_timeout(45000)
+              else:
+                  print("O app ja estava acordado.")
+
+              print("Titulo da pagina no final:", pagina.title())
+              navegador.close()
+          FIM
