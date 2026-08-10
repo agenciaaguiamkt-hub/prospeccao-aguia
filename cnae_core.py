@@ -37,9 +37,7 @@ FIELD_MASK_ENRIQUECER = (
     "places.formattedAddress,"
     "places.nationalPhoneNumber,"
     "places.websiteUri,"
-    "places.googleMapsUri,"
-    "places.rating,"
-    "places.userRatingCount"
+    "places.googleMapsUri"
 )
 
 
@@ -297,8 +295,6 @@ def montar_linha_cnae(empresa, dados_google=None):
         "Email": _email_receita(empresa),
         "Google Meu Negocio": dados_google.get("googleMapsUri", ""),
         "Site": dados_google.get("websiteUri", ""),
-        "Nota": dados_google.get("rating", ""),
-        "N de avaliacoes": dados_google.get("userRatingCount", ""),
         "CNPJ": formatar_cnpj(empresa.get("cnpj", "")),
         "Endereco": _texto_endereco(empresa),
         "Bairro": end.get("bairro", ""),
