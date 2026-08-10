@@ -31,8 +31,6 @@ FIELD_MASK = (
     "places.formattedAddress,"
     "places.nationalPhoneNumber,"
     "places.websiteUri,"
-    "places.rating,"
-    "places.userRatingCount,"
     "places.googleMapsUri,"
     "nextPageToken"
 )
@@ -484,6 +482,4 @@ def montar_linha(lugar):
         "É celular?": eh_celular(lugar.get("nationalPhoneNumber", "")),
         "Site": lugar.get("websiteUri", ""),
         "Google Meu Negócio": lugar.get("googleMapsUri", ""),
-        "Nota": lugar.get("rating", ""),
-        "Nº de avaliações": lugar.get("userRatingCount", ""),
     }
