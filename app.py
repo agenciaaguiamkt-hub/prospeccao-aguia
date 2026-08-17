@@ -48,6 +48,7 @@ from prospeccao_core import (
 
 from cnae_core import (
     normalizar_cnaes,
+    variantes_municipio,
     buscar_empresas_por_cnae,
     buscar_no_google,
     montar_linha_cnae,
@@ -339,8 +340,12 @@ if enviar:
 
         if not empresas:
             st.warning(
-                "Nenhuma empresa encontrada com esse CNAE nesse município. "
-                "Confira se o código CNAE e o nome do município estão certos."
+                f"Nenhuma empresa encontrada. Foi pesquisado o CNAE "
+                f"**{', '.join(cnaes)}** no município "
+                f"**{' ou '.join(variantes_municipio(municipio_cnae))}** "
+                f"(UF **{uf_cnae.strip().upper()}**). Confira o código em "
+                "concla.ibge.gov.br e a grafia do município - acima está "
+                "exatamente o que foi enviado para a Casa dos Dados."
             )
             st.stop()
 
