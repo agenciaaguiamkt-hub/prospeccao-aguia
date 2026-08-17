@@ -21,6 +21,8 @@ diferente do esperado, o mais provavel e que o nome do campo na resposta
 tenha mudado - confira a doc antes de assumir que e bug deste codigo.
 """
 
+import unicodedata
+
 import requests
 
 URL_PESQUISA = "https://api.casadosdados.com.br/v5/cnpj/pesquisa"
@@ -39,6 +41,46 @@ FIELD_MASK_ENRIQUECER = (
     "places.websiteUri,"
     "places.googleMapsUri"
 )
+
+
+UFS = {
+    "ac", "al", "ap", "am", "ba", "ce", "df", "es", "go", "ma", "mt", "ms",
+    "mg", "pa", "pb", "pr", "pe", "pi", "rj", "rn", "rs", "ro", "rr", "sc",
+    "sp", "se", "to",
+}
+
+
+def _tirar_acentos(txt):
+    nfkd = unicodedata.normalize("NFKD", txt or "")
+    return "".join(c for c in nfkd if not unicodedata.combining(c))
+
+
+def variantes_municipio(texto):
+    """Devolve as grafias do municipio que valem a pena mandar na busca.
+
+    POR QUE ISSO EXISTE: a doc da Casa dos Dados usa exemplos SEM acento
+    ("sao paulo"), porque o cadastro da Receita guarda os nomes sem acento.
+    Resultado: buscar "aracatuba" acha e buscar a mesma coisa com cedilha
+    nao acha nada. Foi exatamente isso que fez Aracatuba voltar vazio
+    enquanto Votuporanga (que nao tem acento) funcionava.
+
+    Como o campo `municipio` da API aceita uma LISTA, mando as duas grafias
+    de uma vez e deixo a API casar com a que existir no banco dela. Assim
+    funciona tanto se ela guardar com acento quanto sem - nao consegui
+    confirmar qual das duas e a oficial, entao cubro as duas.
+
+    Tambem tolera a UF digitada junto ("Aracatuba/SP", "Aracatuba - SP").
+    """
+    txt = (texto or "").strip()
+    if len(txt) > 3 and txt[-3] in "/,- " and txt[-2:].lower() in UFS:
+        txt = txt[:-3]
+    txt = txt.strip(" ,/-")
+
+    com_acento = txt.lower()
+    sem_acento = _tirar_acentos(txt).lower()
+    if sem_acento == com_acento:
+        return [com_acento]
+    return [sem_acento, com_acento]
 
 
 def normalizar_cnaes(texto):
@@ -97,9 +139,9 @@ def buscar_empresas_por_cnae(
         if somente_ativas:
             corpo["situacao_cadastral"] = ["ATIVA"]
         if uf:
-            corpo["uf"] = [uf.strip().lower()]
+            corpo["uf"] = [_tirar_acentos(uf).strip().lower()]
         if municipio:
-            corpo["municipio"] = [municipio.strip().lower()]
+            corpo["municipio"] = variantes_municipio(municipio)
 
         # tipo_resultado=completo e OBRIGATORIO para vir endereco, socios,
         # data de abertura, porte etc. O padrao da API e "simples", que
