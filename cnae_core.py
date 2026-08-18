@@ -225,105 +225,12 @@ def _nomes_socios(empresa):
     return limpo if limpo and limpo != razao else ""
 
 
-def _data_br(valor):
-    """'2011-07-13T00:00:00Z' -> '13/07/2011'."""
-    txt = str(valor or "")[:10]
-    partes = txt.split("-")
-    if len(partes) == 3 and len(partes[0]) == 4:
-        return f"{partes[2]}/{partes[1]}/{partes[0]}"
-    return txt
-
-
-def _contato_telefone(empresa):
-    """Le o bloco `contato_telefonico`, que NAO esta na documentacao da API
-    mas vem de verdade na resposta com tipo_resultado=completo (confirmado
-    olhando o retorno real de Aracatuba).
-
-    Cada item traz completo, ddd, numero e tipo ("fixo"/"celular") - ou
-    seja, a propria base ja diz se e celular, o que e melhor do que o meu
-    palpite por quantidade de digitos.
-
-    Prefere celular quando existir, porque para prospeccao um numero de
-    WhatsApp costuma valer mais que um fixo.
-
-    Devolve (telefone, "sim"/"nao"/"")."""
-    lista = empresa.get("contato_telefonico") or []
-    if not isinstance(lista, list):
-        return "", ""
-
-    melhor_fixo = ""
-    melhor_celular = ""
-    for item in lista:
-        if not isinstance(item, dict):
-            continue
-        numero = (item.get("completo") or "").strip()
-        if not numero:
-            numero = " ".join(
-                x
-                for x in [
-                    (item.get("ddd") or "").strip(),
-                    (item.get("numero") or "").strip(),
-                ]
-                if x
-            )
-        if not numero:
-            continue
-
-        tipo = (item.get("tipo") or "").strip().lower()
-        if not tipo:
-            tipo = "celular" if eh_celular(numero) == "sim" else "fixo"
-
-        if tipo.startswith("cel"):
-            if not melhor_celular:
-                melhor_celular = numero
-        elif not melhor_fixo:
-            melhor_fixo = numero
-
-    if melhor_celular:
-        return melhor_celular, "sim"
-    if melhor_fixo:
-        return melhor_fixo, "nao"
-    return "", ""
-
-
-def _contato_email(empresa):
-    """Le o bloco `contato_email` (tambem fora da doc, mas presente na
-    resposta). Devolve (email, "sim"/"nao"/"") para o campo `valido`."""
-    lista = empresa.get("contato_email") or []
-    if not isinstance(lista, list):
-        return "", ""
-    for item in lista:
-        if not isinstance(item, dict):
-            continue
-        email = (item.get("email") or "").strip()
-        if email:
-            valido = item.get("valido")
-            if valido is True:
-                return email, "sim"
-            if valido is False:
-                return email, "nao"
-            return email, ""
-    return "", ""
-
-
 def _atividade_principal(empresa):
     """Devolve (codigo_cnae, descricao) da atividade principal."""
     ativ = empresa.get("atividade_principal") or {}
     if not isinstance(ativ, dict):
         return "", ""
     return (ativ.get("codigo") or ""), (ativ.get("descricao") or "")
-
-
-def _optante(bloco):
-    """MEI e Simples vem como {"optante": true/false}."""
-    if not isinstance(bloco, dict):
-        return ""
-    valor = bloco.get("optante")
-    if valor is True:
-        return "sim"
-    if valor is False:
-        return "nao"
-    return ""
 
 
 def buscar_no_google(nome, municipio, uf, google_api_key, contador=None):
@@ -387,75 +294,34 @@ def formatar_cnpj(cnpj):
 
 def montar_linha_cnae(empresa, dados_google=None):
     """Converte uma empresa da Casa dos Dados (+ o que o Google achou) numa
-    linha da planilha."""
+    linha da planilha.
+
+    O TELEFONE VEM SO DA FICHA DO GOOGLE, de proposito. A Receita tambem
+    devolve telefone, mas e o numero declarado no cadastro - pode ter anos
+    e estar desligado. O do Google e mantido pelo proprio dono no perfil do
+    negocio, entao tende a estar atual. CONSEQUENCIA: se a busca no Google
+    estiver desmarcada, a coluna Telefone fica vazia."""
     dados_google = dados_google or {}
     end = empresa.get("endereco", {}) or {}
-    situacao = empresa.get("situacao_cadastral", {}) or {}
-    porte = empresa.get("porte_empresa", {}) or {}
 
-    # O telefone do Google tende a ser o mais atualizado (o dono mantem o
-    # perfil), entao ele vem na frente. O da Receita entra quando o Google
-    # nao achou - ou quando a busca no Google esta desligada, que e o caso
-    # mais barato.
-    tel_google = dados_google.get("nationalPhoneNumber", "")
-    tel_receita, celular_receita = _contato_telefone(empresa)
-
-    if tel_google:
-        telefone, celular, origem_tel = tel_google, eh_celular(tel_google), "Google"
-    elif tel_receita:
-        telefone = tel_receita
-        celular = celular_receita or eh_celular(tel_receita)
-        origem_tel = "Receita"
-    else:
-        telefone, celular, origem_tel = "", "sem telefone", ""
-
-    email, email_valido = _contato_email(empresa)
-    cnae_codigo, cnae_descricao = _atividade_principal(empresa)
+    telefone = dados_google.get("nationalPhoneNumber", "")
 
     nome_fantasia = (empresa.get("nome_fantasia") or "").strip()
     razao_social = (empresa.get("razao_social") or "").strip()
-
-    capital = empresa.get("capital_social")
-    capital_txt = ""
-    if capital not in (None, "", 0):
-        try:
-            capital_txt = f"R$ {float(capital):,.2f}".replace(",", "@").replace(
-                ".", ","
-            ).replace("@", ".")
-        except (TypeError, ValueError):
-            capital_txt = str(capital)
 
     return {
         "Nome do estabelecimento": nome_fantasia or razao_social,
         "Razao social": razao_social,
         "Socios / responsavel": _nomes_socios(empresa),
         "Telefone": telefone,
-        "E celular?": celular,
-        "Origem do telefone": origem_tel,
-        "Email": email,
-        "Email valido?": email_valido,
+        "E celular?": eh_celular(telefone),
         "Google Meu Negocio": dados_google.get("googleMapsUri", ""),
         "Site": dados_google.get("websiteUri", ""),
         "CNPJ": formatar_cnpj(empresa.get("cnpj", "")),
-        "CNAE": cnae_codigo,
-        "Atividade": cnae_descricao,
+        "CNAE": _atividade_principal(empresa)[0],
         "Endereco": _texto_endereco(empresa),
         "Bairro": end.get("bairro", ""),
         "Municipio": end.get("municipio", ""),
         "UF": end.get("uf", ""),
         "CEP": end.get("cep", ""),
-        # A doc chama esse campo de "situacao_cadastral", mas a resposta
-        # real usa "situacao_atual" - leio os dois para nao depender disso.
-        "Situacao cadastral": (
-            situacao.get("situacao_atual")
-            or situacao.get("situacao_cadastral")
-            or ""
-        ),
-        "Data de abertura": _data_br(empresa.get("data_abertura")),
-        "Porte": porte.get("descricao", ""),
-        "Capital social": capital_txt,
-        "Natureza juridica": empresa.get("descricao_natureza_juridica", ""),
-        "MEI": _optante(empresa.get("mei")),
-        "Simples Nacional": _optante(empresa.get("simples")),
-        "Matriz ou filial": empresa.get("matriz_filial", ""),
     }
