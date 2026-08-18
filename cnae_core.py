@@ -308,20 +308,6 @@ def buscar_no_google(nome, municipio, uf, google_api_key, contador=None):
     return lugares[0]
 
 
-def eh_celular(telefone):
-    """Classifica telefone BR como celular/fixo pela quantidade de digitos."""
-    if not telefone:
-        return "sem telefone"
-    digitos = "".join(c for c in telefone if c.isdigit())
-    if digitos.startswith("55") and len(digitos) > 11:
-        digitos = digitos[2:]
-    if len(digitos) == 11 and digitos[2] == "9":
-        return "sim"
-    if len(digitos) == 10:
-        return "nao"
-    return "indeterminado"
-
-
 def formatar_cnpj(cnpj):
     """00.000.000/0000-00 - sem isso o Excel trata como numero e come o
     zero a esquerda."""
@@ -350,10 +336,8 @@ def montar_linha_cnae(empresa, dados_google=None):
 
     return {
         "Nome do estabelecimento": nome_fantasia or razao_social,
-        "Razao social": razao_social,
         "Socios / responsavel": _nomes_socios(empresa),
         "Telefone": telefone,
-        "E celular?": eh_celular(telefone),
         "Google Meu Negocio": dados_google.get("googleMapsUri", ""),
         "Site": dados_google.get("websiteUri", ""),
         "CNPJ": formatar_cnpj(empresa.get("cnpj", "")),
@@ -362,5 +346,4 @@ def montar_linha_cnae(empresa, dados_google=None):
         "Bairro": end.get("bairro", ""),
         "Municipio": end.get("municipio", ""),
         "UF": end.get("uf", ""),
-        "CEP": end.get("cep", ""),
     }
