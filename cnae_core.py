@@ -22,10 +22,12 @@ tenha mudado - confira a doc antes de assumir que e bug deste codigo.
 """
 
 import unicodedata
+from datetime import date
 
 import requests
 
 URL_PESQUISA = "https://api.casadosdados.com.br/v5/cnpj/pesquisa"
+URL_SALDO = "https://api.casadosdados.com.br/v5/saldo"
 URL_PLACES = "https://places.googleapis.com/v1/places:searchText"
 
 # Quantos CNPJs pedir por pagina. Nao achei o teto oficial documentado com
@@ -186,6 +188,43 @@ def buscar_empresas_por_cnae(
         pagina += 1
 
     return empresas[:limite_total]
+
+
+def consultar_saldo(api_key, timeout=15):
+    """Le o saldo REAL da conta na Casa dos Dados (GET /v5/saldo).
+
+    POR QUE LER DA FONTE em vez de manter um contador proprio: qualquer
+    consulta feita fora deste app - pelo site deles, por outra pessoa da
+    equipe, por outra ferramenta - nao passaria pelo nosso contador, e o
+    numero na tela viraria mentira em poucos dias. Lendo o saldo deles, o
+    que aparece e sempre o que a Casa dos Dados vai cobrar de verdade.
+    Como efeito colateral, a renovacao mensal do plano tambem se resolve
+    sozinha: quando eles recarregam, o numero sobe aqui.
+
+    Devolve (saldo_total, detalhes_por_tipo). O `detalhes` e um dict do
+    tipo {"assinatura": {"valor": 4850, "expira_em": "..."}, ...}."""
+    if not api_key:
+        raise RuntimeError("Sem chave da Casa dos Dados configurada.")
+
+    resp = requests.get(URL_SALDO, headers={"api-key": api_key}, timeout=timeout)
+    if resp.status_code == 401:
+        raise RuntimeError("a chave foi recusada (401)")
+    if resp.status_code != 200:
+        raise RuntimeError(f"a API respondeu {resp.status_code}")
+
+    dados = resp.json() or {}
+    return int(dados.get("saldo_total") or 0), (dados.get("saldos") or {})
+
+
+def proxima_renovacao(hoje=None, dia=18):
+    """Proxima data em que o plano renova. O padrao e dia 18, que e a data
+    de cobranca do plano contratado - se mudar de plano, mude aqui."""
+    hoje = hoje or date.today()
+    if hoje.day < dia:
+        return date(hoje.year, hoje.month, dia)
+    if hoje.month == 12:
+        return date(hoje.year + 1, 1, dia)
+    return date(hoje.year, hoje.month + 1, dia)
 
 
 def _texto_endereco(empresa):
