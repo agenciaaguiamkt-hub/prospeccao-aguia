@@ -9,8 +9,10 @@ SEGURANÇA:
   o navegador do usuário nunca recebe esse valor.
 - A app NAO tem mais senha (removida a pedido): qualquer pessoa com o
   link entra e gasta a cota do Google e da Casa dos Dados. A protecao
-  contra custo passou a ser o teto de chamadas ao Google no codigo mais,
-  principalmente, a trava de cota configurada no Google Cloud.
+  contra custo passou a ser o teto de chamadas ao Google no codigo
+  (TETO_GOOGLE_MES). Nao da para travar a cota do lado do Google nessa
+  API: no console, todas as cotas da Places API (New) sao marcadas como
+  nao ajustaveis e a opcao "Editar cota" fica desabilitada.
 - Há um limite de buscas por sessão de navegador, para conter abuso básico.
 
 LIMITAÇÃO HONESTA: isso é proteção de nível "ferramenta interna pequena",
@@ -85,17 +87,36 @@ if not API_KEY:
 # vira dinheiro. Este teto e a margem de seguranca PARA MENOS: para no
 # 700, deixando 300 chamadas de folga.
 #
-# LIMITACAO HONESTA, leia com atencao: este contador vive na sessao do
-# navegador. Ele impede um estouro por descuido numa sessao de trabalho,
-# mas NAO e uma trava de verdade - abrir uma aba nova zera a contagem, e
-# o Streamlit tambem zera a cada reinicio do app. A unica trava real e a
-# cota configurada no Google Cloud, do lado do servidor deles.
-TETO_GOOGLE_POR_SESSAO = 700
+# LIMITACAO HONESTA: nao existe trava do lado do Google. Conferi no
+# console em 05/09/2026: em Plataforma Google Maps > Cotas > Places API
+# (New), TODAS as 21 cotas aparecem como "Ajustavel: Nao" e a opcao
+# "Editar cota" esta desabilitada. A trava tem que ser aqui no codigo.
+# Este contador e compartilhado por todas as abas e todos os usuarios da
+# mesma instancia do app, e zera sozinho na virada do mes. O que ele NAO
+# resiste: um reinicio do Streamlit Cloud zera a contagem - nesse caso e
+# a folga de 300 chamadas que segura.
+TETO_GOOGLE_MES = 700
+
+
+# st.cache_resource devolve sempre o mesmo objeto para todas as sessoes,
+# entao abrir uma aba nova nao zera mais a contagem.
+@st.cache_resource
+def _cota_google():
+    return {"mes": "", "chamadas": 0}
+
+
+# Devolve o contador ja com o reset da virada de mes aplicado.
+def cota_google_atual():
+    cota = _cota_google()
+    mes = date.today().strftime("%Y-%m")
+    if cota["mes"] != mes:
+        cota["mes"] = mes
+        cota["chamadas"] = 0
+    return cota
 
 if "buscas_feitas" not in st.session_state:
     st.session_state.buscas_feitas = 0
-if "google_chamadas" not in st.session_state:
-    st.session_state.google_chamadas = 0
+# o contador do Google agora e global, ver cota_google_atual acima
 
 # ----------------------- UI -----------------------
 st.title("🔎 Prospecção via Google Places")
@@ -167,6 +188,14 @@ def mostrar_saldo():
 
 
 mostrar_saldo()
+
+_cg = cota_google_atual()
+_folga = max(0, TETO_GOOGLE_MES - _cg["chamadas"])
+st.caption(
+    f"Trava do Google: {_cg['chamadas']} de {TETO_GOOGLE_MES} chamadas usadas "
+    f"neste mes ({_folga} restantes). O teto e proposital, abaixo da franquia "
+    "gratuita de 1.000 chamadas/mes, para nao virar cobranca."
+)
 
 modo = st.radio(
     "Modo de busca",
@@ -426,6 +455,7 @@ if enviar:
 
         linhas_prontas = []
         travou_google = False  # para avisar do teto uma vez so
+        cota_google = cota_google_atual()
         progresso_cnae = st.progress(0.0)
         status_cnae = st.empty()
         total_emp = len(empresas) or 1
@@ -433,11 +463,11 @@ if enviar:
         for i, empresa in enumerate(empresas):
             nome = (empresa.get("nome_fantasia") or empresa.get("razao_social") or "").strip()
             dados_google = {}
-            if enriquecer_google and st.session_state.google_chamadas >= TETO_GOOGLE_POR_SESSAO:
+            if enriquecer_google and cota_google["chamadas"] >= TETO_GOOGLE_MES:
                 if not travou_google:
                     st.warning(
-                        f"Teto de {TETO_GOOGLE_POR_SESSAO} chamadas ao Google "
-                        "atingido nesta sessão. O restante da lista vem só com "
+                        f"Teto de {TETO_GOOGLE_MES} chamadas ao Google "
+                        "atingido neste mês. O restante da lista vem só com "
                         "os dados da Receita, sem telefone nem link do Google. "
                         "Isso existe para não passar da franquia gratuita.",
                         icon="🛑",
@@ -445,7 +475,7 @@ if enviar:
                     travou_google = True
             elif enriquecer_google:
                 status_cnae.write(f"Procurando no Google: {nome or '(sem nome)'}")
-                st.session_state.google_chamadas += 1
+                cota_google["chamadas"] += 1
                 dados_google = buscar_no_google(
                     nome,
                     (empresa.get("endereco", {}) or {}).get("municipio", ""),
