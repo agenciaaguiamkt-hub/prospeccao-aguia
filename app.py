@@ -7,8 +7,10 @@ SEGURANÇA:
   Ela é lida de st.secrets["GOOGLE_PLACES_API_KEY"], que fica guardada
   de forma criptografada pelo Streamlit Cloud e só existe no servidor -
   o navegador do usuário nunca recebe esse valor.
-- A app fica protegida por uma senha simples (st.secrets["APP_PASSWORD"]),
-  para impedir que qualquer pessoa na internet gaste sua cota da API.
+- A app NAO tem mais senha (removida a pedido): qualquer pessoa com o
+  link entra e gasta a cota do Google e da Casa dos Dados. A protecao
+  contra custo passou a ser o teto de chamadas ao Google no codigo mais,
+  principalmente, a trava de cota configurada no Google Cloud.
 - Há um limite de buscas por sessão de navegador, para conter abuso básico.
 
 LIMITAÇÃO HONESTA: isso é proteção de nível "ferramenta interna pequena",
@@ -61,7 +63,6 @@ st.set_page_config(page_title="Prospecção de Clínicas", page_icon="🔎")
 
 # ----------------------- CONFIG / SECRETS -----------------------
 API_KEY = st.secrets.get("GOOGLE_PLACES_API_KEY", "")
-APP_PASSWORD = st.secrets.get("APP_PASSWORD", "")
 CASA_DOS_DADOS_API_KEY = st.secrets.get("CASA_DOS_DADOS_API_KEY", "")
 LIMITE_BUSCAS_POR_SESSAO = 20  # trava simples contra abuso, não é robusta
 
@@ -73,33 +74,28 @@ if not API_KEY:
     )
     st.stop()
 
-# ----------------------- GATE DE SENHA -----------------------
-if APP_PASSWORD:
-    if "autenticado" not in st.session_state:
-        st.session_state.autenticado = False
+a# O gate de senha foi removido a pedido: a app agora abre direto.
+# Consequencia: qualquer pessoa com o link usa a app e gasta a sua cota
+# do Google e da Casa dos Dados. A defesa passou a ser o TETO_GOOGLE
+# abaixo (e, principalmente, a trava de cota no Google Cloud).
 
-    if not st.session_state.autenticado:
-        st.title("🔒 Prospecção via Google Places")
-        senha = st.text_input("Senha de acesso", type="password")
-        if st.button("Entrar"):
-            if senha == APP_PASSWORD:
-                st.session_state.autenticado = True
-                st.rerun()
-            else:
-                st.error("Senha incorreta.")
-        st.stop()
-else:
-    st.warning(
-        "Nenhuma senha configurada (APP_PASSWORD ausente nos Secrets) - "
-        "esta app está acessível a qualquer pessoa com o link, e ela "
-        "consome sua cota/faturamento da Google Places API. Configure uma "
-        "senha assim que possível (veja DEPLOY_NUVEM.md).",
-        icon="⚠️",
-    )
+# ----------------------- TRAVA DE GASTO -----------------------
+# A franquia gratuita do Google e de 1.000 chamadas/mes no SKU Enterprise
+# (que e onde as nossas caem, por pedirem telefone e site). Passou disso,
+# vira dinheiro. Este teto e a margem de seguranca PARA MENOS: para no
+# 700, deixando 300 chamadas de folga.
+#
+# LIMITACAO HONESTA, leia com atencao: este contador vive na sessao do
+# navegador. Ele impede um estouro por descuido numa sessao de trabalho,
+# mas NAO e uma trava de verdade - abrir uma aba nova zera a contagem, e
+# o Streamlit tambem zera a cada reinicio do app. A unica trava real e a
+# cota configurada no Google Cloud, do lado do servidor deles.
+TETO_GOOGLE_POR_SESSAO = 700
 
-# ----------------------- RATE LIMIT SIMPLES -----------------------
 if "buscas_feitas" not in st.session_state:
     st.session_state.buscas_feitas = 0
+if "google_chamadas" not in st.session_state:
+    st.session_state.google_chamadas = 0
 
 # ----------------------- UI -----------------------
 st.title("🔎 Prospecção via Google Places")
@@ -429,6 +425,7 @@ if enviar:
             st.json(empresas[0])
 
         linhas_prontas = []
+        travou_google = False  # para avisar do teto uma vez so
         progresso_cnae = st.progress(0.0)
         status_cnae = st.empty()
         total_emp = len(empresas) or 1
@@ -436,8 +433,19 @@ if enviar:
         for i, empresa in enumerate(empresas):
             nome = (empresa.get("nome_fantasia") or empresa.get("razao_social") or "").strip()
             dados_google = {}
-            if enriquecer_google:
+            if enriquecer_google and st.session_state.google_chamadas >= TETO_GOOGLE_POR_SESSAO:
+                if not travou_google:
+                    st.warning(
+                        f"Teto de {TETO_GOOGLE_POR_SESSAO} chamadas ao Google "
+                        "atingido nesta sessão. O restante da lista vem só com "
+                        "os dados da Receita, sem telefone nem link do Google. "
+                        "Isso existe para não passar da franquia gratuita.",
+                        icon="🛑",
+                    )
+                    travou_google = True
+            elif enriquecer_google:
                 status_cnae.write(f"Procurando no Google: {nome or '(sem nome)'}")
+                st.session_state.google_chamadas += 1
                 dados_google = buscar_no_google(
                     nome,
                     (empresa.get("endereco", {}) or {}).get("municipio", ""),
