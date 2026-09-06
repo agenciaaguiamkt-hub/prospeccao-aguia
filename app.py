@@ -74,7 +74,7 @@ if not API_KEY:
     )
     st.stop()
 
-a# O gate de senha foi removido a pedido: a app agora abre direto.
+# O gate de senha foi removido a pedido: a app agora abre direto.
 # Consequencia: qualquer pessoa com o link usa a app e gasta a sua cota
 # do Google e da Casa dos Dados. A defesa passou a ser o TETO_GOOGLE
 # abaixo (e, principalmente, a trava de cota no Google Cloud).
