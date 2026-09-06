@@ -84,8 +84,7 @@ if not API_KEY:
 # ----------------------- TRAVA DE GASTO -----------------------
 # A franquia gratuita do Google e de 1.000 chamadas/mes no SKU Enterprise
 # (que e onde as nossas caem, por pedirem telefone e site). Passou disso,
-# vira dinheiro. Este teto e a margem de seguranca PARA MENOS: para no
-# 700, deixando 300 chamadas de folga.
+# vira dinheiro. Este teto para no 900, 100 abaixo da franquia.
 #
 # LIMITACAO HONESTA: nao existe trava do lado do Google. Conferi no
 # console em 05/09/2026: em Plataforma Google Maps > Cotas > Places API
@@ -93,9 +92,11 @@ if not API_KEY:
 # "Editar cota" esta desabilitada. A trava tem que ser aqui no codigo.
 # Este contador e compartilhado por todas as abas e todos os usuarios da
 # mesma instancia do app, e zera sozinho na virada do mes. O que ele NAO
-# resiste: um reinicio do Streamlit Cloud zera a contagem - nesse caso e
-# a folga de 300 chamadas que segura.
-TETO_GOOGLE_MES = 700
+# resiste: um reinicio do Streamlit Cloud zera a contagem, e ai o mes
+# inteiro pode passar de 900 outra vez. A margem de 100 cobre chamada
+# feita fora do app com a mesma chave e imprecisao no que o Google conta
+# como cobravel - ela NAO protege contra reinicio.
+TETO_GOOGLE_MES = 900
 
 
 # st.cache_resource devolve sempre o mesmo objeto para todas as sessoes,
