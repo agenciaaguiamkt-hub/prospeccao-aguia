@@ -41,6 +41,7 @@ from datetime import date
 
 import pandas as pd
 import streamlit as st
+from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 
 import math
@@ -123,9 +124,9 @@ if "buscas_feitas" not in st.session_state:
 # ----------------------- UI -----------------------
 st.title("🔎 Prospecção de empresas")
 st.caption(
-    "Busca lugares na Google Places API (New), classifica telefone "
-    "celular/fixo, traz o link do Google Meu Negócio e procura o "
-    "Instagram no site de cada um."
+    "Monta listas de empresas prontas para prospecção: nome, telefone, site "
+    "e link do Google Meu Negócio. Você pode buscar por CNAE (cadastro da "
+    "Receita Federal), por categoria de negócio ou por busca manual."
 )
 
 # ----------------------- SALDO DO PLANO -----------------------
@@ -273,6 +274,10 @@ def _reais(valor):
     return f"{valor:,.2f}".replace(",", "@").replace(".", ",").replace("@", ".")
 
 
+# Texto que aparece na celula no lugar da URL crua (o link fica embutido).
+ROTULO_LINK = "Clique aqui"
+
+
 def montar_excel(df):
     """Monta um .xlsx de verdade (nao CSV): cada campo na sua coluna,
     largura ajustada, cabecalho congelado e filtro ligado.
@@ -294,11 +299,26 @@ def montar_excel(df):
             aba.freeze_panes = "A2"
             if len(dados.columns) and len(dados):
                 aba.auto_filter.ref = aba.dimensions
-            for i, coluna in enumerate(dados.columns, start=1):
-                tamanhos = [len(str(v)) for v in dados[coluna].head(300)]
-                largura = max([len(str(coluna))] + tamanhos) + 2
+            # Troca a URL crua por um "Clique aqui" ja clicavel. Sem isso o
+            # Excel entrega a URL como texto comum: so vira link depois que
+            # voce edita a celula e aperta Enter, uma por uma.
+            for linha in aba.iter_rows(min_row=2):
+                for celula in linha:
+                    valor = celula.value
+                    if isinstance(valor, str) and valor.startswith("http"):
+                        celula.hyperlink = valor
+                        celula.value = ROTULO_LINK
+                        celula.font = Font(color="0563C1", underline="single")
+
+            # Largura medida DEPOIS da troca - senao a coluna fica larga a toa
+            # por causa do tamanho da URL que nem aparece mais.
+            for i in range(1, aba.max_column + 1):
+                tamanhos = [
+                    len(str(aba.cell(row=r, column=i).value or ""))
+                    for r in range(1, min(aba.max_row, 300) + 1)
+                ]
                 aba.column_dimensions[get_column_letter(i)].width = min(
-                    55, max(12, largura)
+                    55, max(12, max(tamanhos) + 2)
                 )
     buffer.seek(0)
     return buffer, len(com_tel), len(sem_tel)
