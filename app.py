@@ -130,11 +130,17 @@ st.caption(
     "Receita Federal), por categoria de negócio ou por busca manual."
 )
 
-# ----------------------- SALDO DO PLANO -----------------------
-# Plano contratado na Casa dos Dados: 5.000 consultas por mes, renovando
-# todo dia 18. Esses dois numeros sao so para desenhar a barra e a data -
-# o SALDO em si vem da API deles, nao de contagem nossa.
-PLANO_CONSULTAS_MES = 5000
+# ----------------------- SALDO DA CASA DOS DADOS -----------------------
+# O saldo vem da API deles (GET /v5/saldo). O que eu NAO consigo deduzir
+# desse numero e "quantas usei no ciclo": o saldo pode ser maior que o
+# tamanho do plano, porque credito que sobrou do mes anterior e pacote
+# avulso se somam. Foi o que apareceu na tela - "8.808 restantes de 5.000",
+# com a barra estourada e "0 usadas". Os dois eram deducao minha em cima de
+# uma constante fixa, e estavam errados.
+#
+# Agora so mostro o que da para afirmar: o saldo e a data de renovacao. A
+# barra usa como referencia o maior saldo ja visto neste ciclo, entao ela
+# comeca cheia e vai drenando conforme voce usa - sem denominador chutado.
 DIA_RENOVACAO = 18
 
 
@@ -145,50 +151,74 @@ def _saldo_em_cache(chave):
     return consultar_saldo(chave)
 
 
+# Maior saldo visto no ciclo atual, compartilhado por todas as sessoes.
+@st.cache_resource
+def _referencia_saldo():
+    return {"ciclo": "", "maior": 0}
+
+
+def _milhar(n):
+    """1234 -> '1.234', do jeito brasileiro."""
+    return f"{int(n):,}".replace(",", ".")
+
+
 def mostrar_saldo():
     if not CASA_DOS_DADOS_API_KEY:
         return
     try:
-        restantes, _detalhes = _saldo_em_cache(CASA_DOS_DADOS_API_KEY)
+        restantes, detalhes = _saldo_em_cache(CASA_DOS_DADOS_API_KEY)
     except Exception as e:
         st.caption(f"Não consegui ler o saldo da Casa dos Dados agora ({e}).")
         return
 
-    usadas = max(0, PLANO_CONSULTAS_MES - restantes)
-    fracao = min(1.0, max(0.0, restantes / PLANO_CONSULTAS_MES))
     renova = proxima_renovacao(dia=DIA_RENOVACAO)
     dias = (renova - date.today()).days
 
-    if fracao > 0.4:
+    ref = _referencia_saldo()
+    ciclo = renova.strftime("%Y-%m")
+    if ref["ciclo"] != ciclo:
+        ref["ciclo"], ref["maior"] = ciclo, restantes
+    ref["maior"] = max(ref["maior"], restantes)
+    fracao = min(1.0, max(0.0, restantes / ref["maior"])) if ref["maior"] else 0.0
+
+    # A cor olha o numero ABSOLUTO que sobrou, nao a fracao: depois de um
+    # reinicio a referencia da barra volta a ser o saldo atual, e ai a
+    # fracao seria sempre 100% - verde mesmo com 50 consultas na conta.
+    if restantes > 1000:
         cor, fundo, borda = "#1B5E20", "#E8F5E9", "#66BB6A"
-    elif fracao > 0.15:
+    elif restantes > 300:
         cor, fundo, borda = "#E65100", "#FFF8E1", "#FFB74D"
     else:
         cor, fundo, borda = "#B71C1C", "#FFEBEE", "#EF5350"
 
-    # Milhar com ponto, do jeito brasileiro. Formato os numeros aqui em
-    # vez de dar replace no HTML inteiro - senao uma virgula em algum
-    # estilo CSS viraria ponto e quebraria o card.
-    n_restantes = f"{restantes:,}".replace(",", ".")
-    n_plano = f"{PLANO_CONSULTAS_MES:,}".replace(",", ".")
-    n_usadas = f"{usadas:,}".replace(",", ".")
     plural = "s" if dias != 1 else ""
-
     st.markdown(
         f"""<div style="background:{fundo};border:1px solid {borda};
         border-radius:8px;padding:14px 18px;margin:4px 0 14px 0;color:#1a1a1a;">
         <div style="font-size:1.15em;">
-        <strong style="color:{cor};">{n_restantes}</strong> consultas restantes
-        <span style="opacity:0.7;">de {n_plano} no plano</span></div>
+        <strong style="color:{cor};">{_milhar(restantes)}</strong> consultas
+        restantes na Casa dos Dados</div>
         <div style="background:#00000018;border-radius:99px;height:9px;margin:9px 0 7px 0;">
         <div style="background:{borda};width:{fracao * 100:.1f}%;height:9px;
         border-radius:99px;"></div></div>
         <div style="font-size:0.82em;opacity:0.8;">
-        {n_usadas} usadas neste ciclo &nbsp;&middot;&nbsp; renova em
-        {renova.strftime("%d/%m/%Y")} (em {dias} dia{plural})
+        renova em {renova.strftime("%d/%m/%Y")} (em {dias} dia{plural})
         </div></div>""",
         unsafe_allow_html=True,
     )
+
+    # De onde vem o saldo, quando a API detalha (assinatura, bonus, avulso).
+    # E isso que explica um saldo maior que o tamanho do plano contratado.
+    try:
+        partes = []
+        for nome, valor in (detalhes or {}).items():
+            bruto = valor.get("valor") if isinstance(valor, dict) else valor
+            if bruto is not None:
+                partes.append(f"{nome}: {_milhar(bruto)}")
+        if len(partes) > 1:
+            st.caption("Composição do saldo — " + " · ".join(partes))
+    except Exception:
+        pass
 
 
 mostrar_saldo()
