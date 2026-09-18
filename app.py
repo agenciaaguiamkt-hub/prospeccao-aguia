@@ -130,18 +130,23 @@ st.caption(
     "Receita Federal), por categoria de negócio ou por busca manual."
 )
 
-# ----------------------- SALDO DA CASA DOS DADOS -----------------------
-# O saldo vem da API deles (GET /v5/saldo). O que eu NAO consigo deduzir
-# desse numero e "quantas usei no ciclo": o saldo pode ser maior que o
-# tamanho do plano, porque credito que sobrou do mes anterior e pacote
-# avulso se somam. Foi o que apareceu na tela - "8.808 restantes de 5.000",
-# com a barra estourada e "0 usadas". Os dois eram deducao minha em cima de
-# uma constante fixa, e estavam errados.
+# ----------------------- OS DOIS SALDOS -----------------------
+# Sao duas contas diferentes, de empresas diferentes, e elas se esgotam de
+# jeitos diferentes. Por isso dois cards, lado a lado:
 #
-# Agora so mostro o que da para afirmar: o saldo e a data de renovacao. A
-# barra usa como referencia o maior saldo ja visto neste ciclo, entao ela
-# comeca cheia e vai drenando conforme voce usa - sem denominador chutado.
+# 1) Casa dos Dados - paga os dados da Receita (CNPJ, socios, endereco).
+#    O saldo vem da API deles. NAO da para deduzir o tamanho do plano a
+#    partir do saldo, porque credito nao usado acumula enquanto a
+#    assinatura estiver ativa - por isso a barra usa como referencia o
+#    maior saldo visto no ciclo, e nao um numero fixo chutado.
+# 2) Google Places - paga telefone, site e link do Google Meu Negocio.
+#    Aqui o denominador e conhecido de verdade: o TETO_GOOGLE_MES que nos
+#    mesmos definimos. E o que sobra NAO acumula, some na virada do mes.
 DIA_RENOVACAO = 18
+
+VERDE = ("#1B5E20", "#E8F5E9", "#66BB6A")
+LARANJA = ("#E65100", "#FFF8E1", "#FFB74D")
+VERMELHO = ("#B71C1C", "#FFEBEE", "#EF5350")
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -162,18 +167,43 @@ def _milhar(n):
     return f"{int(n):,}".replace(",", ".")
 
 
-def mostrar_saldo():
+def _primeiro_dia_proximo_mes(hoje=None):
+    """Quando a franquia do Google zera: sempre dia 1o."""
+    hoje = hoje or date.today()
+    if hoje.month == 12:
+        return date(hoje.year + 1, 1, 1)
+    return date(hoje.year, hoje.month + 1, 1)
+
+
+def _card_saldo(titulo, numero, unidade, fracao, rodape, cores):
+    cor, fundo, borda = cores
+    st.markdown(
+        f"""<div style="background:{fundo};border:1px solid {borda};
+        border-radius:8px;padding:12px 16px;color:#1a1a1a;">
+        <div style="font-size:0.72em;text-transform:uppercase;
+        letter-spacing:0.05em;opacity:0.65;">{titulo}</div>
+        <div style="font-size:1.3em;line-height:1.3;margin-top:2px;">
+        <strong style="color:{cor};">{numero}</strong></div>
+        <div style="font-size:0.8em;opacity:0.8;">{unidade}</div>
+        <div style="background:#00000018;border-radius:99px;height:8px;margin:8px 0 6px 0;">
+        <div style="background:{borda};width:{fracao * 100:.1f}%;height:8px;
+        border-radius:99px;"></div></div>
+        <div style="font-size:0.76em;opacity:0.8;">{rodape}</div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def _card_casa_dos_dados():
     if not CASA_DOS_DADOS_API_KEY:
         return
     try:
-        restantes, detalhes = _saldo_em_cache(CASA_DOS_DADOS_API_KEY)
+        restantes, _detalhes = _saldo_em_cache(CASA_DOS_DADOS_API_KEY)
     except Exception as e:
         st.caption(f"Não consegui ler o saldo da Casa dos Dados agora ({e}).")
         return
 
     renova = proxima_renovacao(dia=DIA_RENOVACAO)
-    dias = (renova - date.today()).days
-
     ref = _referencia_saldo()
     ciclo = renova.strftime("%Y-%m")
     if ref["ciclo"] != ciclo:
@@ -181,54 +211,59 @@ def mostrar_saldo():
     ref["maior"] = max(ref["maior"], restantes)
     fracao = min(1.0, max(0.0, restantes / ref["maior"])) if ref["maior"] else 0.0
 
-    # A cor olha o numero ABSOLUTO que sobrou, nao a fracao: depois de um
-    # reinicio a referencia da barra volta a ser o saldo atual, e ai a
-    # fracao seria sempre 100% - verde mesmo com 50 consultas na conta.
+    # A cor olha o numero absoluto: a referencia da barra se redefine quando
+    # o app reinicia, entao a fracao sozinha ficaria sempre em 100%.
     if restantes > 1000:
-        cor, fundo, borda = "#1B5E20", "#E8F5E9", "#66BB6A"
+        cores = VERDE
     elif restantes > 300:
-        cor, fundo, borda = "#E65100", "#FFF8E1", "#FFB74D"
+        cores = LARANJA
     else:
-        cor, fundo, borda = "#B71C1C", "#FFEBEE", "#EF5350"
+        cores = VERMELHO
 
-    plural = "s" if dias != 1 else ""
-    st.markdown(
-        f"""<div style="background:{fundo};border:1px solid {borda};
-        border-radius:8px;padding:14px 18px;margin:4px 0 14px 0;color:#1a1a1a;">
-        <div style="font-size:1.15em;">
-        <strong style="color:{cor};">{_milhar(restantes)}</strong> consultas
-        restantes na Casa dos Dados</div>
-        <div style="background:#00000018;border-radius:99px;height:9px;margin:9px 0 7px 0;">
-        <div style="background:{borda};width:{fracao * 100:.1f}%;height:9px;
-        border-radius:99px;"></div></div>
-        <div style="font-size:0.82em;opacity:0.8;">
-        renova em {renova.strftime("%d/%m/%Y")} (em {dias} dia{plural})
-        </div></div>""",
-        unsafe_allow_html=True,
+    _card_saldo(
+        "1 · Dados da Receita (Casa dos Dados)",
+        _milhar(restantes),
+        "consultas restantes",
+        fracao,
+        f"Renova em {renova.strftime('%d/%m')} · o que sobra acumula",
+        cores,
     )
 
-    # De onde vem o saldo, quando a API detalha (assinatura, bonus, avulso).
-    # E isso que explica um saldo maior que o tamanho do plano contratado.
-    try:
-        partes = []
-        for nome, valor in (detalhes or {}).items():
-            bruto = valor.get("valor") if isinstance(valor, dict) else valor
-            if bruto is not None:
-                partes.append(f"{nome}: {_milhar(bruto)}")
-        if len(partes) > 1:
-            st.caption("Composição do saldo — " + " · ".join(partes))
-    except Exception:
-        pass
+
+def _card_google():
+    cota = cota_google_atual()
+    restantes = max(0, TETO_GOOGLE_MES - cota["chamadas"])
+    fracao = restantes / TETO_GOOGLE_MES if TETO_GOOGLE_MES else 0.0
+
+    if fracao > 0.4:
+        cores = VERDE
+    elif fracao > 0.15:
+        cores = LARANJA
+    else:
+        cores = VERMELHO
+
+    zera = _primeiro_dia_proximo_mes()
+    _card_saldo(
+        "2 · Telefone e Google Meu Negócio (Google)",
+        f"{_milhar(restantes)} de {_milhar(TETO_GOOGLE_MES)}",
+        "chamadas restantes",
+        fracao,
+        f"Zera em {zera.strftime('%d/%m')} · o que sobra NÃO acumula",
+        cores,
+    )
 
 
-mostrar_saldo()
+col_receita, col_google = st.columns(2)
+with col_receita:
+    _card_casa_dos_dados()
+with col_google:
+    _card_google()
 
-_cg = cota_google_atual()
-_folga = max(0, TETO_GOOGLE_MES - _cg["chamadas"])
 st.caption(
-    f"Trava do Google: {_cg['chamadas']} de {TETO_GOOGLE_MES} chamadas usadas "
-    f"neste mes ({_folga} restantes). O teto e proposital, abaixo da franquia "
-    "gratuita de 1.000 chamadas/mes, para nao virar cobranca."
+    f"Cada empresa da lista consome **1 consulta** da Casa dos Dados e **1 a 2 "
+    f"chamadas** do Google (a 2ª só quando a 1ª não acha). O teto de "
+    f"{_milhar(TETO_GOOGLE_MES)} é nosso, proposital, abaixo da franquia "
+    "gratuita de 1.000/mês do Google — é ele que impede virar cobrança."
 )
 
 modo = st.radio(
