@@ -144,9 +144,26 @@ st.caption(
 #    mesmos definimos. E o que sobra NAO acumula, some na virada do mes.
 DIA_RENOVACAO = 18
 
-VERDE = ("#1B5E20", "#E8F5E9", "#66BB6A")
-LARANJA = ("#E65100", "#FFF8E1", "#FFB74D")
-VERMELHO = ("#B71C1C", "#FFEBEE", "#EF5350")
+# ----------------------- SEMAFORO -----------------------
+# Mesma linguagem visual nos dois cards: verde/amarelo/vermelho, com
+# emoji e rotulo escritos, para nao depender so da cor (quem enxerga mal
+# cor, ou olha a tela no sol, le a palavra).
+# Ordem: (emoji, rotulo, cor do texto, fundo, borda).
+SEMAFORO = (
+    ("🟢", "Tranquilo", "#1B5E20", "#E8F5E9", "#66BB6A"),
+    ("🟡", "Atenção", "#E65100", "#FFF8E1", "#FFB74D"),
+    ("🔴", "Crítico", "#B71C1C", "#FFEBEE", "#EF5350"),
+)
+
+
+def _nivel(valor, limite_atencao, limite_critico):
+    """0 = tranquilo, 1 = atencao, 2 = critico. Funciona tanto para numero
+    absoluto (Casa dos Dados) quanto para fracao 0-1 (Google)."""
+    if valor > limite_atencao:
+        return 0
+    if valor > limite_critico:
+        return 1
+    return 2
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -175,13 +192,17 @@ def _primeiro_dia_proximo_mes(hoje=None):
     return date(hoje.year, hoje.month + 1, 1)
 
 
-def _card_saldo(titulo, numero, unidade, fracao, rodape, cores):
-    cor, fundo, borda = cores
+def _card_saldo(titulo, numero, unidade, fracao, rodape, nivel):
+    emoji, rotulo, cor, fundo, borda = SEMAFORO[nivel]
     st.markdown(
         f"""<div style="background:{fundo};border:1px solid {borda};
         border-radius:8px;padding:12px 16px;color:#1a1a1a;">
-        <div style="font-size:0.72em;text-transform:uppercase;
-        letter-spacing:0.05em;opacity:0.65;">{titulo}</div>
+        <div style="display:flex;justify-content:space-between;
+        align-items:flex-start;gap:10px;">
+        <span style="font-size:0.72em;text-transform:uppercase;
+        letter-spacing:0.05em;opacity:0.65;">{titulo}</span>
+        <span style="font-size:0.74em;white-space:nowrap;color:{cor};
+        font-weight:700;">{emoji} {rotulo}</span></div>
         <div style="font-size:1.3em;line-height:1.3;margin-top:2px;">
         <strong style="color:{cor};">{numero}</strong></div>
         <div style="font-size:0.8em;opacity:0.8;">{unidade}</div>
@@ -195,13 +216,14 @@ def _card_saldo(titulo, numero, unidade, fracao, rodape, cores):
 
 
 def _card_casa_dos_dados():
+    """Desenha o card e devolve (nivel, restantes) - ou None se nao deu."""
     if not CASA_DOS_DADOS_API_KEY:
-        return
+        return None
     try:
         restantes, _detalhes = _saldo_em_cache(CASA_DOS_DADOS_API_KEY)
     except Exception as e:
         st.caption(f"Não consegui ler o saldo da Casa dos Dados agora ({e}).")
-        return
+        return None
 
     renova = proxima_renovacao(dia=DIA_RENOVACAO)
     ref = _referencia_saldo()
@@ -211,37 +233,30 @@ def _card_casa_dos_dados():
     ref["maior"] = max(ref["maior"], restantes)
     fracao = min(1.0, max(0.0, restantes / ref["maior"])) if ref["maior"] else 0.0
 
-    # A cor olha o numero absoluto: a referencia da barra se redefine quando
-    # o app reinicia, entao a fracao sozinha ficaria sempre em 100%.
-    if restantes > 1000:
-        cores = VERDE
-    elif restantes > 300:
-        cores = LARANJA
-    else:
-        cores = VERMELHO
-
+    # Semaforo pelo numero ABSOLUTO, nao pela fracao: a referencia da barra
+    # se redefine quando o app reinicia, entao a fracao voltaria a 100% e
+    # ficaria verde mesmo com 50 consultas na conta.
+    nivel = _nivel(restantes, 1000, 300)
     _card_saldo(
         "1 · Dados da Receita (Casa dos Dados)",
         _milhar(restantes),
         "consultas restantes",
         fracao,
         f"Renova em {renova.strftime('%d/%m')} · o que sobra acumula",
-        cores,
+        nivel,
     )
+    return nivel, restantes
 
 
 def _card_google():
+    """Desenha o card e devolve (nivel, restantes, data em que zera)."""
     cota = cota_google_atual()
     restantes = max(0, TETO_GOOGLE_MES - cota["chamadas"])
     fracao = restantes / TETO_GOOGLE_MES if TETO_GOOGLE_MES else 0.0
 
-    if fracao > 0.4:
-        cores = VERDE
-    elif fracao > 0.15:
-        cores = LARANJA
-    else:
-        cores = VERMELHO
-
+    # Aqui o denominador e real (o teto que nos definimos), entao o
+    # semaforo pode seguir a fracao mesmo.
+    nivel = _nivel(fracao, 0.50, 0.20)
     zera = _primeiro_dia_proximo_mes()
     _card_saldo(
         "2 · Telefone e Google Meu Negócio (Google)",
@@ -249,15 +264,33 @@ def _card_google():
         "chamadas restantes",
         fracao,
         f"Zera em {zera.strftime('%d/%m')} · o que sobra NÃO acumula",
-        cores,
+        nivel,
     )
+    return nivel, restantes, zera
 
 
 col_receita, col_google = st.columns(2)
 with col_receita:
-    _card_casa_dos_dados()
+    _est_cdd = _card_casa_dos_dados()
 with col_google:
-    _card_google()
+    _est_google = _card_google()
+
+# No vermelho, o card sozinho nao basta: diz o que fazer.
+if _est_cdd and _est_cdd[0] == 2:
+    st.error(
+        f"Casa dos Dados quase no fim: **{_milhar(_est_cdd[1])} consultas**. "
+        "Recarregue no portal deles antes da próxima busca grande, senão a "
+        "busca para no meio.",
+        icon="🔴",
+    )
+if _est_google[0] == 2:
+    st.error(
+        f"Restam **{_milhar(_est_google[1])} chamadas** ao Google até "
+        f"{_est_google[2].strftime('%d/%m')}. Quando zerar, a planilha continua "
+        "saindo — mas sem telefone e link do Google. O telefone da Receita "
+        "ainda entra, marcado na coluna de origem.",
+        icon="🔴",
+    )
 
 st.caption(
     f"Cada empresa da lista consome **1 consulta** da Casa dos Dados e **1 a 2 "
