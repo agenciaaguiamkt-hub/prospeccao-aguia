@@ -37,6 +37,7 @@ mais caro do que uma busca única.
 
 import io
 import time
+from collections import Counter
 from datetime import date
 
 import pandas as pd
@@ -381,18 +382,34 @@ def montar_excel(df):
     """Monta um .xlsx de verdade (nao CSV): cada campo na sua coluna,
     largura ajustada, cabecalho congelado e filtro ligado.
 
-    Sao duas abas, nessa ordem: 'Com telefone' primeiro, porque e a lista
-    que se usa para ligar, e 'Sem telefone' depois, com o resto. A divisao
-    e feita pela coluna Telefone estar vazia ou nao."""
-    if "Telefone" in df.columns:
-        tem = df["Telefone"].astype(str).str.strip() != ""
-        com_tel, sem_tel = df[tem], df[~tem]
+    Primeiro separo por tipo de CNAE, depois por telefone:
+      1. 'Com telefone'          - CNAE principal e tem telefone. A lista boa.
+      2. 'Sem telefone'          - CNAE principal, sem telefone.
+      3. 'CNAE como secundário'  - so aparece quando existe alguma. Na busca
+         de Palmas 82 das 100 linhas eram assim, e 80 delas foram marcadas
+         como inuteis - por isso ficam separadas, longe da lista de ligar."""
+    col_tipo = "CNAE buscado é"
+    if col_tipo in df.columns:
+        eh_sec = (
+            df[col_tipo].astype(str).str.strip().str.lower().str.startswith("secund")
+        )
+        secundarios, principais = df[eh_sec], df[~eh_sec]
     else:
-        com_tel, sem_tel = df, df.iloc[0:0]
+        secundarios, principais = df.iloc[0:0], df
+
+    if "Telefone" in principais.columns:
+        tem = principais["Telefone"].astype(str).str.strip() != ""
+        com_tel, sem_tel = principais[tem], principais[~tem]
+    else:
+        com_tel, sem_tel = principais, principais.iloc[0:0]
+
+    folhas = [("Com telefone", com_tel), ("Sem telefone", sem_tel)]
+    if len(secundarios):
+        folhas.append(("CNAE como secundário", secundarios))
 
     buffer = io.BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        for nome_aba, dados in (("Com telefone", com_tel), ("Sem telefone", sem_tel)):
+        for nome_aba, dados in folhas:
             dados.to_excel(writer, index=False, sheet_name=nome_aba)
             aba = writer.sheets[nome_aba]
             aba.freeze_panes = "A2"
@@ -420,7 +437,7 @@ def montar_excel(df):
                     55, max(12, max(tamanhos) + 2)
                 )
     buffer.seek(0)
-    return buffer, len(com_tel), len(sem_tel)
+    return buffer, len(com_tel), len(sem_tel), len(secundarios)
 
 
 if modo == "Busca por CNAE":
@@ -457,6 +474,21 @@ if modo == "Busca por CNAE":
         value=100,
         step=10,
         help="Comece baixo para conferir se o CNAE está certo antes de gastar.",
+    )
+
+    # O achado da busca de Palmas (CNAE 4721102): 82 das 100 empresas vieram
+    # porque o CNAE era atividade SECUNDARIA delas, e 80 dessas foram
+    # marcadas como inuteis. Por isso este filtro nasce LIGADO.
+    so_principal = st.checkbox(
+        "Somente empresas cujo CNAE principal é o que eu busquei",
+        value=True,
+        help=(
+            "A Casa dos Dados devolve a empresa tanto quando o CNAE é a "
+            "atividade principal dela quanto quando é só uma das secundárias. "
+            "Um supermercado, por exemplo, costuma ter dezenas de CNAEs "
+            "secundários. Desmarcando, essas empresas voltam a aparecer - e "
+            "vão para uma aba separada na planilha."
+        ),
     )
 
     # A busca de telefone/site/Google Meu Negocio deixou de ser opcional:
@@ -551,6 +583,7 @@ if enviar:
                     uf_cnae,
                     municipio_cnae,
                     limite_total=int(limite_cnae),
+                    incluir_secundaria=not so_principal,
                     contador=contador_cdd,
                 )
             except RuntimeError as e:
@@ -582,6 +615,7 @@ if enviar:
             st.json(empresas[0])
 
         linhas_prontas = []
+        pares_google = []
         travou_google = False  # para avisar do teto uma vez so
         cota_google = cota_google_atual()
         progresso_cnae = st.progress(0.0)
@@ -611,8 +645,34 @@ if enviar:
                     empresa, API_KEY, contador=contador_api
                 )
                 cota_google["chamadas"] += contador_api["chamadas"] - antes
-            linhas_prontas.append(montar_linha_cnae(empresa, dados_google, cnaes))
+            pares_google.append((empresa, dados_google))
             progresso_cnae.progress((i + 1) / total_emp)
+
+        # Uma mesma ficha do Google apontada por empresas DIFERENTES e sinal
+        # de match errado - normalmente a busca por endereco caiu no predio,
+        # no condominio ou no vizinho. Na planilha de Palmas isso atingiu 19%
+        # das linhas, com uma unica ficha servindo a 5 empresas. Como nao da
+        # para saber qual das 5 e a certa, descarto para todas: a linha cai
+        # para o telefone da Receita, que pelo menos e daquele CNPJ.
+        usos = Counter(
+            g.get("googleMapsUri") for _, g in pares_google if g.get("googleMapsUri")
+        )
+        repetidas = {u for u, n in usos.items() if n > 1}
+        descartadas = 0
+        for empresa, dados_google in pares_google:
+            if dados_google.get("googleMapsUri") in repetidas:
+                dados_google = {}
+                descartadas += 1
+            linhas_prontas.append(montar_linha_cnae(empresa, dados_google, cnaes))
+
+        if descartadas:
+            st.warning(
+                f"Descartei a ficha do Google de **{descartadas} empresas**: a "
+                "mesma ficha estava sendo devolvida para empresas diferentes, "
+                "o que indica match errado (prédio ou vizinho em vez do "
+                "negócio). Essas linhas ficaram com o telefone da Receita.",
+                icon="⚠️",
+            )
 
         status_cnae.empty()
         progresso_cnae.empty()
@@ -701,7 +761,7 @@ if enviar:
     df = pd.DataFrame(linhas)
     st.dataframe(df, use_container_width=True)
 
-    buffer, n_com_tel, n_sem_tel = montar_excel(df)
+    buffer, n_com_tel, n_sem_tel, n_sec = montar_excel(df)
 
     nome_arquivo = f"prospeccao_{int(time.time())}.xlsx"
     st.download_button(
@@ -710,10 +770,10 @@ if enviar:
         file_name=nome_arquivo,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    st.caption(
-        f"A planilha vem em 2 abas: **Com telefone** ({n_com_tel}) e "
-        f"**Sem telefone** ({n_sem_tel})."
-    )
+    _abas = [f"**Com telefone** ({n_com_tel})", f"**Sem telefone** ({n_sem_tel})"]
+    if n_sec:
+        _abas.append(f"**CNAE como secundário** ({n_sec})")
+    st.caption("A planilha vem em abas: " + " · ".join(_abas) + ".")
 
     st.info(
         f"Chamadas à Places API: **{contador_api['chamadas']}** · "
