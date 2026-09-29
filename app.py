@@ -36,8 +36,12 @@ mais caro do que uma busca única.
 """
 
 import io
+import json
+import os
+import tempfile
 import time
 from collections import Counter
+from pathlib import Path
 from datetime import date
 
 import pandas as pd
@@ -97,17 +101,52 @@ if not API_KEY:
 # Este contador e compartilhado por todas as abas e todos os usuarios da
 # mesma instancia do app, e zera sozinho na virada do mes. O que ele NAO
 # resiste: um reinicio do Streamlit Cloud zera a contagem, e ai o mes
-# inteiro pode passar de 900 outra vez. A margem de 100 cobre chamada
-# feita fora do app com a mesma chave e imprecisao no que o Google conta
-# como cobravel - ela NAO protege contra reinicio.
+# inteiro pode passar de 900 outra vez.
 TETO_GOOGLE_MES = 900
 
+# POR QUE ISTO EXISTE EM DISCO, e nao so na memoria: em setembro/2026 o
+# contador em memoria marcava 494 chamadas, mas a fatura do Google mostrou
+# R$ 38,22 em Text Search Enterprise - cobranca que so comeca depois das
+# 1.000 gratuitas. Ou seja, o uso real foi de ~1.200 e o teto de 900 nao
+# segurou nada: o Streamlit reiniciou o processo no meio do mes e o
+# contador voltou do zero.
+#
+# Gravando em arquivo, a contagem sobrevive a reinicio do processo e a
+# hibernacao. LIMITE QUE PERMANECE: uma reimplantacao (commit novo, mudanca
+# em requirements.txt, rebuild do container) cria um container limpo e leva
+# o arquivo junto. Depois de cada deploy a contagem recomeca do zero.
+ARQUIVO_COTA = Path(tempfile.gettempdir()) / "prospeccao_aguia_cota_google.json"
 
-# st.cache_resource devolve sempre o mesmo objeto para todas as sessoes,
-# entao abrir uma aba nova nao zera mais a contagem.
+
+def _ler_cota_do_disco():
+    try:
+        dados = json.loads(ARQUIVO_COTA.read_text(encoding="utf-8"))
+        return {
+            "mes": str(dados.get("mes", "")),
+            "chamadas": max(0, int(dados.get("chamadas", 0))),
+        }
+    except Exception:
+        # Arquivo inexistente, vazio ou corrompido: comeca do zero. Nunca
+        # deixo isso derrubar o app - seria trocar custo por indisponibilidade.
+        return {"mes": "", "chamadas": 0}
+
+
+def _gravar_cota_no_disco(cota):
+    try:
+        provisorio = ARQUIVO_COTA.with_suffix(".tmp")
+        provisorio.write_text(json.dumps(cota), encoding="utf-8")
+        # os.replace e atomico: ou o arquivo antigo, ou o novo inteiro.
+        # Sem isso, uma queda no meio da escrita deixaria JSON pela metade.
+        os.replace(provisorio, ARQUIVO_COTA)
+    except Exception:
+        pass
+
+
+# st.cache_resource devolve sempre o mesmo objeto para todas as sessoes.
+# Na primeira vez no processo, ele nasce do que estiver gravado em disco.
 @st.cache_resource
 def _cota_google():
-    return {"mes": "", "chamadas": 0}
+    return _ler_cota_do_disco()
 
 
 # Devolve o contador ja com o reset da virada de mes aplicado.
@@ -115,9 +154,21 @@ def cota_google_atual():
     cota = _cota_google()
     mes = date.today().strftime("%Y-%m")
     if cota["mes"] != mes:
-        cota["mes"] = mes
-        cota["chamadas"] = 0
+        cota["mes"], cota["chamadas"] = mes, 0
+        _gravar_cota_no_disco(cota)
     return cota
+
+
+def registrar_chamadas_google(cota, quantas):
+    """Soma as chamadas e grava na hora.
+
+    Gravar a cada empresa, e nao so no fim da busca, e proposital: se a
+    busca cair no meio (erro, aba fechada, app reiniciado), o que ja foi
+    gasto continua contado."""
+    if quantas <= 0:
+        return
+    cota["chamadas"] += quantas
+    _gravar_cota_no_disco(cota)
 
 if "buscas_feitas" not in st.session_state:
     st.session_state.buscas_feitas = 0
@@ -644,7 +695,9 @@ if enviar:
                 dados_google = enriquecer_com_google(
                     empresa, API_KEY, contador=contador_api
                 )
-                cota_google["chamadas"] += contador_api["chamadas"] - antes
+                registrar_chamadas_google(
+                    cota_google, contador_api["chamadas"] - antes
+                )
             pares_google.append((empresa, dados_google))
             progresso_cnae.progress((i + 1) / total_emp)
 
