@@ -2,4 +2,4 @@ streamlit>=1.32
 requests>=2.31
 pandas>=2.0
 openpyxl>=3.1
-# rebuild 18/09/2026 - forcar recarga do cnae_core.py
+# rebuild 27/10/2026 - carregar validacao de fichas do Google (cnae_core.py)
