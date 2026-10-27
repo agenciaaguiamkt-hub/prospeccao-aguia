@@ -718,6 +718,17 @@ if enviar:
                 descartadas += 1
             linhas_prontas.append(montar_linha_cnae(empresa, dados_google, cnaes))
 
+        rejeitadas = contador_api.get("rejeitadas", 0)
+        if rejeitadas:
+            st.info(
+                f"Recusei a ficha do Google de **{rejeitadas} empresas** porque "
+                "ela estava em outra cidade ou em outro endereço que não o do "
+                "cadastro da Receita (homônimos, ruas com o mesmo sobrenome, "
+                "lojas de mesmo nome em outro estado). Essas linhas ficaram "
+                "com o telefone da Receita.",
+                icon="🔎",
+            )
+
         if descartadas:
             st.warning(
                 f"Descartei a ficha do Google de **{descartadas} empresas**: a "
