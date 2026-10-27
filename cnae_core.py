@@ -317,9 +317,106 @@ def telefone_da_receita(empresa):
     return ""
 
 
+# ----------------------- VALIDACAO DO MATCH NO GOOGLE -----------------------
+# POR QUE ISTO EXISTE (outubro/2026, busca de Florianopolis, CNAE 4744099):
+# o app aceitava cegamente o 1o resultado do Google, e a busca de texto do
+# Google devolve o melhor match de TEXTO no Brasil inteiro. Resultado:
+#   - "COSTA TRANSPORTE E MATERIAL..." virou uma loja de Guarulhos/SP;
+#   - "ALESSANDRO COSTA" virou um cirurgiao buco-maxilo do Itaim Bibi/SP;
+#   - "PATRICIA ... CAVALCANTI" virou a RUA Medico Miguel Salles Cavalcanti;
+#   - "EDUARDO BORTOLI" virou o escritorio Bortoli & Judacheski Advogados.
+# Agora uma ficha so e aceita se estiver na MESMA CIDADE e no MESMO ENDERECO
+# do cadastro da Receita. Isso derruba quase todo falso positivo - e tambem
+# derruba empresa que funciona num endereco diferente do registrado. Troca
+# consciente: prefiro celula vazia a celula errada.
+
+# Palavras que aparecem em qualquer endereco e nao identificam rua nenhuma.
+_PALAVRAS_GENERICAS = {
+    "rua", "avenida", "av", "rodovia", "rod", "servidao", "serv", "travessa",
+    "tv", "alameda", "al", "estrada", "est", "praca", "largo", "via", "beco",
+    "quadra", "lote", "conjunto", "conj", "sala", "loja", "casa", "apto", "apt",
+    "dos", "das", "del", "sem", "numero", "brasil", "geral", "km",
+}
+
+
+def _sem_acento_minusculo(txt):
+    return _tirar_acentos(str(txt or "")).lower()
+
+
+def _palavras_da_rua(txt):
+    """Palavras que de fato identificam a rua: tira acento, abreviacao,
+    preposicao e numero de casa (fica so numero de rodovia, 3+ digitos)."""
+    palavras = set()
+    atual = ""
+    for ch in _sem_acento_minusculo(txt) + " ":
+        if ch.isalnum():
+            atual += ch
+            continue
+        if atual and atual not in _PALAVRAS_GENERICAS:
+            if atual.isdigit():
+                if len(atual) >= 3:
+                    palavras.add(atual)
+            elif len(atual) >= 3:
+                palavras.add(atual)
+        atual = ""
+    return palavras
+
+
+def _cep_do_texto(txt):
+    """Primeiro CEP (8 digitos, com ou sem hifen) que aparecer no texto."""
+    so_digitos_e_hifen = "".join(c if (c.isdigit() or c == "-") else " " for c in str(txt or ""))
+    for pedaco in so_digitos_e_hifen.split():
+        d = pedaco.replace("-", "")
+        if len(d) == 8 and d.isdigit():
+            return d
+    return ""
+
+
+def validar_lugar(empresa, lugar, por_endereco=False):
+    """(aceito, motivo). Aceita a ficha do Google so se ela estiver na mesma
+    cidade E no mesmo endereco do cadastro da Receita.
+
+    Mesmo endereco = mesmo CEP, OU a parte "rua" do endereco do Google tem
+    alguma palavra de verdade em comum com o logradouro da Receita. Comparo
+    so a parte antes da 1a virgula do Google (a rua), nunca bairro/cidade -
+    senao "Rua Santos Dumont" casaria com qualquer bairro "Santos".
+
+    Na busca POR ENDERECO exijo tambem o mesmo numero de casa: sem isso ela
+    devolve o vizinho, o predio ou a propria rua."""
+    end = empresa.get("endereco", {}) or {}
+    endereco_google = lugar.get("formattedAddress") or ""
+    if not endereco_google:
+        return False, "ficha sem endereço"
+
+    municipio = _sem_acento_minusculo(end.get("municipio", "")).strip()
+    if municipio and municipio not in _sem_acento_minusculo(endereco_google):
+        return False, "outra cidade"
+
+    cep_receita = _so_digitos(end.get("cep", ""))
+    mesmo_cep = len(cep_receita) == 8 and cep_receita == _cep_do_texto(endereco_google)
+
+    rua_google = endereco_google.split(",")[0]
+    mesma_rua = bool(_palavras_da_rua(end.get("logradouro", "")) & _palavras_da_rua(rua_google))
+
+    if not (mesmo_cep or mesma_rua):
+        return False, "outro endereço"
+
+    if por_endereco:
+        numero = _so_digitos(end.get("numero", ""))
+        numeros_google = set(_so_digitos(x) for x in endereco_google.replace("-", " ").replace(",", " ").split())
+        if not numero or numero not in numeros_google:
+            return False, "outro número"
+
+    return True, ""
+
+
 def _consultar_places(consulta, google_api_key, contador=None):
-    """Uma chamada a Places API Text Search. Devolve o 1o lugar ou {}."""
-    corpo = {"textQuery": consulta, "languageCode": "pt-BR", "pageSize": 1}
+    """Uma chamada a Places API Text Search. Devolve ate 5 candidatos.
+
+    Peco 5 em vez de 1 porque a cobranca e por requisicao, nao por resultado
+    - e assim, se o 1o candidato for de outra cidade, o 2o ou 3o ainda pode
+    ser o certo, sem gastar outra chamada."""
+    corpo = {"textQuery": consulta, "languageCode": "pt-BR", "pageSize": 5}
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": google_api_key,
@@ -330,14 +427,23 @@ def _consultar_places(consulta, google_api_key, contador=None):
     except requests.RequestException:
         if contador is not None:
             contador["chamadas"] = contador.get("chamadas", 0) + 1
-        return {}
+        return []
 
     if contador is not None:
         contador["chamadas"] = contador.get("chamadas", 0) + 1
     if resp.status_code != 200:
-        return {}
-    lugares = resp.json().get("places", []) or []
-    return lugares[0] if lugares else {}
+        return []
+    return resp.json().get("places", []) or []
+
+
+def _primeiro_valido(empresa, candidatos, por_endereco, contador):
+    for lugar in candidatos:
+        aceito, _motivo = validar_lugar(empresa, lugar, por_endereco=por_endereco)
+        if aceito:
+            return lugar
+    if candidatos and contador is not None:
+        contador["rejeitadas"] = contador.get("rejeitadas", 0) + 1
+    return {}
 
 
 def enriquecer_com_google(empresa, google_api_key, contador=None):
@@ -345,14 +451,11 @@ def enriquecer_com_google(empresa, google_api_key, contador=None):
     Google Meu Negocio. Faz ate DUAS chamadas:
 
     1) pelo nome limpo + municipio + UF;
-    2) so se a 1a nao achar nada, pelo endereco completo.
+    2) so se a 1a nao achar nada VALIDO, pelo endereco completo.
 
-    A 2a tentativa acha bastante MEI que nao tem o nome na fachada, mas tem
-    um risco real: um endereco pode devolver o vizinho, o predio ou a sala
-    ao lado. Por isso marco de onde veio ('_origem') e a planilha mostra
-    isso na coluna de origem do telefone - confira antes de ligar.
-
-    Devolve {} quando as duas tentativas falham."""
+    Cada candidato passa por validar_lugar(): mesma cidade e mesmo endereco
+    da Receita. Nada valido -> devolve {} e a linha usa o telefone da
+    Receita, que pelo menos e daquele CNPJ."""
     if not google_api_key:
         return {}
 
@@ -362,14 +465,18 @@ def enriquecer_com_google(empresa, google_api_key, contador=None):
     nome = nome_para_busca(empresa)
     if nome:
         consulta = " ".join(x for x in [nome, municipio, uf] if x)
-        lugar = _consultar_places(consulta, google_api_key, contador)
+        lugar = _primeiro_valido(
+            empresa, _consultar_places(consulta, google_api_key, contador), False, contador
+        )
         if lugar:
             lugar["_origem"] = "nome"
             return lugar
 
     endereco = _texto_endereco(empresa)
     if endereco:
-        lugar = _consultar_places(endereco, google_api_key, contador)
+        lugar = _primeiro_valido(
+            empresa, _consultar_places(endereco, google_api_key, contador), True, contador
+        )
         if lugar:
             lugar["_origem"] = "endereco"
             return lugar
@@ -429,7 +536,7 @@ def montar_linha_cnae(empresa, dados_google=None, cnaes_buscados=None):
 
     return {
         "Nome do estabelecimento": nome_fantasia or razao_social,
-        "Socios / responsavel": _nomes_socios(empresa),
+        "Sócios (cadastro da Receita)": _nomes_socios(empresa),
         "Telefone": telefone,
         "Origem do telefone": origem,
         "Google Meu Negocio": dados_google.get("googleMapsUri", ""),
